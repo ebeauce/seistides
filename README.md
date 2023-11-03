@@ -4,8 +4,7 @@ Python package for the analysis of tidal modulation of seismicity.
 Work-in-progress!
 
 Check out the Jupyter notebook to reproduce the results from Beaucé et al.
-(2023).
-
+(2023). The analysis routines are in `seistides/seistides.py`.
 
 References
 ----------
