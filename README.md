@@ -10,3 +10,6 @@ References
 ----------
 
 - Beaucé, E., Poli, P., Waldhauser, F., Holtzman, B., & Scholz, C. (2023). Enhanced tidal sensitivity of seismicity before the 2019 magnitude 7.1 Ridgecrest, California earthquake. Geophysical Research Letters, 50(14), e2023GL104375.
+
+
+![figure_tides](./data/figure_tides.png)
