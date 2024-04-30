@@ -504,47 +504,28 @@ def ocean_load_example2(
 #        os.system(f"mv {os.path.join(folder, fn)} .")
 #    print("Done!")
 
+def get_strain_tensor(azimuth_0, azimuth_270, azimuth_315, poisson=0.25, scale=1.e-9):
+    """Compute the strain tensor from N, W, and NW strains
+    in the (north, west, up) basis.
+    """
+    # convert to strain
+    azimuth_0 = azimuth_0 * scale
+    azimuth_270 = azimuth_270 * scale
+    azimuth_315 = azimuth_315 * scale
+    # 
+    e_xy = azimuth_315 - (azimuth_0 + azimuth_270) / 2.
+    constant = -poisson / (1. - poisson)
+    e_zz = constant * (azimuth_0 + azimuth_270)
+    # full tensor
+    zeros = np.zeros_like(azimuth_0)
+    e_ij = np.array(
+            (
+                [azimuth_0, e_xy, zeros],
+                [e_xy, azimuth_270, zeros],
+                [zeros, zeros, e_zz]
+                )
+            )
+    return e_ij
 
-# get stress from rosette formula
-def getStress(strike, rake, dip):
 
-    # put angles in rad
-    s_strike = np.deg2rad(strike)
-    s_rake = np.deg2rad(rake)
-    s_dip = np.deg2rad(dip)
 
-    # load the strain
-    N = pd.read_csv("ertid0").to_numpy().flatten()
-    E = pd.read_csv("ertid90").to_numpy().flatten()
-    NE = pd.read_csv("ertid45").to_numpy().flatten()
-
-    S = NE - (N + E) / 2
-
-    # Elastic parameteres
-    G = 30e9  # Shear
-    poi = 0.25  #  # Poisson
-    PWM = 2 * G * (1 - poi) / (1 - 2 * poi)  # P-wave modulus
-
-    # get the stress
-    exy = S
-    Ee = (
-        N * np.sin(s_strike) ** 2
-        + E * np.cos(s_strike) ** 2
-        - 2 * exy * np.sin(s_strike) * np.cos(s_strike)
-    )
-    Ss = (E - N) * np.sin(s_strike) * np.cos(s_strike) + exy * (
-        np.cos(s_strike) ** 2 - np.sin(s_strike) ** 2
-    )
-
-    # Normal Strain
-    sigma = Ee * np.sin(s_dip)
-
-    # Shear Strain
-    # In strike-dip-rake system, where x1 is the strike direction, a rake of
-    # zero is left lateral
-    tau = Ss * np.cos(s_rake)
-
-    # ertid returns nanostrain
-    ss = tau * G * 1e-9
-    fns = sigma * PWM * 1e-9
-    return ss, fns, N, E, NE
