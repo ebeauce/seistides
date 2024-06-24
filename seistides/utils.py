@@ -2,7 +2,10 @@ import h5py as h5
 import numpy as np
 import pandas as pd
 
+import matplotlib.pyplot as plt
+
 from functools import partial
+from scipy.signal import wiener
 
 try:
     from scipy.stats import median_absolute_deviation as scimad
@@ -98,10 +101,16 @@ def bin_eq_tidal_stresses(
         seismicity_vs_stress[f]["observed_rate"] = seismicity_vs_stress[f][
             "hist"
         ] / np.sum(seismicity_vs_stress[f]["hist"])
-        # 0/0 is 0
-        seismicity_vs_stress[f]["observed_rate"][
-            np.isnan(seismicity_vs_stress[f]["observed_rate"])
-        ] = 0.0
+        # anticipate 0/0
+        zero_by_zero = (seismicity_vs_stress[f]["observed_rate"] == 0.0) & (
+            seismicity_vs_stress[f]["expected_rate"] == 0.0
+        )
+        seismicity_vs_stress[f]["observed_rate"][zero_by_zero] = 1.0
+        seismicity_vs_stress[f]["expected_rate"][zero_by_zero] = 1.0
+        ## 0/0 is 0
+        #seismicity_vs_stress[f]["observed_rate"][
+        #    np.isnan(seismicity_vs_stress[f]["observed_rate"])
+        #] = 0.0
         # we study the ratio of the observed rate / expected rate to highlight
         # tidal triggering
         rate_ratio = (
@@ -111,8 +120,9 @@ def bin_eq_tidal_stresses(
         # -----------------------------------------
         #              method 1
         # use special value to indicate no data
-        rate_ratio[np.isnan(rate_ratio)] = -10.0
-        rate_ratio[np.isinf(rate_ratio)] = -10.0
+        #rate_ratio[np.isnan(rate_ratio)] = -10.0
+        #rate_ratio[np.isinf(rate_ratio)] = -10.0
+        rate_ratio[np.isnan(rate_ratio) | np.isinf(rate_ratio)] = -10.
         # normalization so that the ratio vector sums up to 1.
         norm = np.mean(rate_ratio[rate_ratio != -10.0])
         if norm != 0.0:
@@ -120,11 +130,11 @@ def bin_eq_tidal_stresses(
         ## -----------------------------------------
         ##              method 2
         ## use special value to indicate no data
-        #rate_ratio[np.isnan(rate_ratio)] = 1.
-        #rate_ratio[np.isinf(rate_ratio)] = 1.
+        # rate_ratio[np.isnan(rate_ratio)] = 1.
+        # rate_ratio[np.isinf(rate_ratio)] = 1.
         ## normalization so that the ratio vector sums up to 1.
-        #norm = np.mean(rate_ratio)
-        #if norm != 0.0:
+        # norm = np.mean(rate_ratio)
+        # if norm != 0.0:
         #    rate_ratio /= norm
         seismicity_vs_stress[f]["rate_ratio"] = rate_ratio
 
@@ -213,19 +223,34 @@ def bin_eq_tidal_phases(
             "hist"
         ] / np.sum(seismicity_vs_phase[f]["hist"])
         # 0/0 is 0
-        seismicity_vs_phase[f]["observed_rate"][
-            np.isnan(seismicity_vs_phase[f]["observed_rate"])
-        ] = 0.0
-        seismicity_vs_phase[f]["observed_rate"][
-            np.isinf(seismicity_vs_phase[f]["observed_rate"])
-        ] = 0.0
+        invalid = np.isnan(seismicity_vs_phase[f]["observed_rate"]) | np.isinf(
+            seismicity_vs_phase[f]["observed_rate"]
+        )
+        # seismicity_vs_phase[f]["observed_rate"][
+        #    np.isnan(seismicity_vs_phase[f]["observed_rate"])
+        # ] = 0.0
+        # seismicity_vs_phase[f]["observed_rate"][
+        #    np.isinf(seismicity_vs_phase[f]["observed_rate"])
+        # ] = 0.0
+        # anticipate 0/0
+        zero_by_zero = (seismicity_vs_phase[f]["observed_rate"] == 0.0) & (
+            seismicity_vs_phase[f]["expected_rate"] == 0.0
+        )
+        seismicity_vs_phase[f]["observed_rate"][zero_by_zero] = 1.0
+        seismicity_vs_phase[f]["expected_rate"][zero_by_zero] = 1.0
         # ratio of observed to expected seismicity = corrected pdf
         rate_ratio = (
             seismicity_vs_phase[f]["observed_rate"]
             / seismicity_vs_phase[f]["expected_rate"]
         )
-        rate_ratio[np.isnan(rate_ratio)] = 1.0
-        rate_ratio[np.isinf(rate_ratio)] = 1.0
+        # rate_ratio[np.isnan(rate_ratio)] = 1.0
+        # rate_ratio[np.isinf(rate_ratio)] = 1.0
+        rate_ratio[invalid] = 1.0
+        if np.any(np.isinf(rate_ratio)):
+            print("observed rate", seismicity_vs_phase[f]["observed_rate"])
+            print("expected rate", seismicity_vs_phase[f]["expected_rate"])
+            print("hist", tidal_phase_hist)
+            print("data", tidal_stress[f])
         # normalization so that the ratio vector sums up to 1.
         norm = np.mean(rate_ratio)
         if norm != 0.0:
@@ -245,11 +270,13 @@ def composite_rate_ratio_vs_stress(
     short_window_days=3 * 30,
     num_short_windows=8,
     overlap=0.0,
-    progress=False,
     stress_bins={},
     downsample=0,
     num_bootstrap_for_errors=100,
-    aggregate="median"
+    aggregate="median",
+    min_num_events_in_short_window=10,
+    keep_short_windows=False,
+    progress=False,
 ):
     """Compute the composite (mean or median) rate ratio vs tidal stress.
 
@@ -298,8 +325,9 @@ def composite_rate_ratio_vs_stress(
         "forward",
     }, "window_type should be either of 'backward' or 'forward'"
     assert aggregate in {
-            "mean", "median"
-            }, "aggregate should be either of 'mean' or 'median'"
+        "mean",
+        "median",
+    }, "aggregate should be either of 'mean' or 'median'"
 
     if aggregate == "median":
         operator = partial(np.ma.median, axis=-1)
@@ -326,12 +354,10 @@ def composite_rate_ratio_vs_stress(
     for n in tqdm(
         range(num_short_windows), desc="Computing in sub-windows", disable=disable
     ):
-        t_start = t_end - short_window_dur
+        #t_start = t_end - short_window_dur
         seismicity_vs_forcing_short_win.append(
             bin_eq_tidal_stresses(
-                cat[
-                    (cat["origin_time"] > t_start) & (cat["origin_time"] <= t_end)
-                ],
+                cat[(cat["origin_time"] > t_start) & (cat["origin_time"] <= t_end)],
                 tidal_stress[
                     (tidal_stress.index > t_start) & (tidal_stress.index <= t_end)
                 ],
@@ -340,49 +366,70 @@ def composite_rate_ratio_vs_stress(
                 fields=[forcing_name],
             )
         )
-        t_end -= short_window_shift
 
+        if window_type == "backward":
+            t_end -= short_window_shift
+            t_start -= short_window_shift
+        elif window_type == "forward":
+            t_end += short_window_shift
+            t_start += short_window_shift
 
     # ----------------------------------------------
     #            aggregate results
     # ----------------------------------------------
     seismicity_vs_forcing = {}
     for field1 in seismicity_vs_forcing_short_win[0]:
+        # outer loop: if several forcing types
         seismicity_vs_forcing[field1] = {}
+        num_events = [
+            seismicity_vs_forcing_short_win[i][field1]["hist"].sum()
+            for i in range(num_short_windows)
+        ]
         for field2 in seismicity_vs_forcing_short_win[0][field1]:
+            # inner loop: all the short-window quantities are aggregated
+            #             into a single long-window estimate
             if field2 == "bins":
                 continue
             all_windows = np.stack(
                 [
                     seismicity_vs_forcing_short_win[i][field1][field2]
                     for i in range(num_short_windows)
+                    if num_events[i] >= min_num_events_in_short_window
                 ],
                 axis=-1,
             )
+            if all_windows.shape[-1] == 0:
+                print(
+                    "Could not find any short windows with more events"
+                    f"than min_num_events_in_short_window "
+                    f"(={min_num_events_in_short_window})"
+                )
+            if keep_short_windows:
+                seismicity_vs_forcing[field1][f"all_windows_{field2}"] = all_windows
             if field2 == "expected_rate":
                 seismicity_vs_forcing[field1][field2] = np.sum(
                     all_windows, axis=-1
                 ).astype("float32")
+                # by construction, this is a pdf so its integral must be 1
                 seismicity_vs_forcing[field1][field2] /= np.float32(
                     np.sum(seismicity_vs_forcing[field1][field2])
                 )
-            elif field2 == "rate_ratio":
-                all_windows = np.ma.masked_array(
-                    data=all_windows, mask=all_windows == -10.0
-                )
-                #seismicity_vs_forcing[field1][field2] = np.ma.median(
+            elif field2 in ["hist", "observed_rate", "rate_ratio"]:
+                if field2 == "rate_ratio":
+                    #all_windows = np.ma.masked_array(
+                    #    data=all_windows, mask=all_windows == -10.0
+                    #)
+                    index_pool = np.arange(all_windows.shape[0])
+                    for i in range(all_windows.shape[-1]):
+                        valid = all_windows[:, i] != -10.
+                        all_windows[:, i] = np.interp(
+                                index_pool,
+                                index_pool[valid],
+                                all_windows[valid, i]
+                                )
+                # seismicity_vs_forcing[field1][field2] = operator(
                 #    all_windows, axis=-1
-                #)
-                (
-                    seismicity_vs_forcing[field1][field2],
-                    seismicity_vs_forcing[field1][f"{field2}_err"],
-                ) = bootstrap_statistic(
-                    all_windows, operator, n_bootstraps=num_bootstrap_for_errors
-                )
-            elif field2 in ["hist", "observed_rate"]:
-                #seismicity_vs_forcing[field1][field2] = operator(
-                #    all_windows, axis=-1
-                #)
+                # )
                 # seismicity_vs_forcing[field1][f"{field2}_err"] = np.median(
                 #    np.abs(
                 #        all_windows - np.median(all_windows, axis=-1, keepdims=True)
@@ -395,6 +442,12 @@ def composite_rate_ratio_vs_stress(
                 ) = bootstrap_statistic(
                     all_windows, operator, n_bootstraps=num_bootstrap_for_errors
                 )
+
+                first_singular_vector = get_singular_vector(
+                    all_windows.T, singular_value_index=0
+                )
+                seismicity_vs_forcing[field1][f"{field2}"] = first_singular_vector
+
             if (downsample > 0) and field2 in [
                 "observed_rate",
                 "rate_ratio",
@@ -415,21 +468,35 @@ def composite_rate_ratio_vs_stress(
                         ),
                         axis=-1,
                     )
-            if field2 in ["rate_ratio"]:
-                seismicity_vs_forcing[field1][f"{field2}"] /= np.ma.mean(
-                    seismicity_vs_forcing[field1][f"{field2}"]
-                )
-            elif field2 in ["observed_rate", "expected_rate"]:
-                seismicity_vs_forcing[field1][f"{field2}"] /= np.ma.sum(
-                    seismicity_vs_forcing[field1][f"{field2}"]
-                )
-        seismicity_vs_forcing[field1][
-            "bins"
-        ] = seismicity_vs_forcing_short_win[0][field1]["bins"]
+        seismicity_vs_forcing[field1]["bins"] = seismicity_vs_forcing_short_win[0][
+            field1
+        ]["bins"]
         if downsample > 0:
-            seismicity_vs_forcing[field1]["bins"] = seismicity_vs_forcing[
-                field1
-            ]["bins"][::downsample]
+            seismicity_vs_forcing[field1]["bins"] = seismicity_vs_forcing[field1][
+                "bins"
+            ][::downsample]
+
+        # =========================
+        #       normalize
+        # =========================
+        # --------- rate_ratio
+        bins_ = seismicity_vs_forcing[field1]["bins"]
+        midbins = (bins_ + bins_) / 2.
+        # theoretically, the rate ratio at stress=0 must be 1
+        ref_bin_idx = np.abs(midbins).argmin()
+        ref_rate_ratio =  seismicity_vs_forcing[field1]["rate_ratio"][
+                np.array([ref_bin_idx-1, ref_bin_idx, ref_bin_idx+1])
+                ].mean()
+        seismicity_vs_forcing[field1]["rate_ratio"] /= ref_rate_ratio
+        #seismicity_vs_forcing[field1][f"{field2}"] /= np.ma.mean(
+        #    seismicity_vs_forcing[field1][f"{field2}"]
+        #)
+        # --------- observed and expected rate
+        for field2 in ["observed_rate", "expected_rate"]:
+            seismicity_vs_forcing[field1][field2] /= np.ma.sum(
+                seismicity_vs_forcing[field1][field2]
+            )
+
     return seismicity_vs_forcing
 
 
@@ -448,6 +515,8 @@ def composite_rate_ratio_vs_phase(
     downsample=0,
     num_bootstrap_for_errors=100,
     aggregate="median",
+    min_num_events_in_short_window=10,
+    keep_short_windows=False,
     progress=False,
 ):
     """Count number of earthquakes in phase bins with bootstrapping analysis.
@@ -493,8 +562,9 @@ def composite_rate_ratio_vs_phase(
         "forward",
     }, "window_type should be either of 'backward' or 'forward'"
     assert aggregate in {
-            "mean", "median"
-            }, "aggregate should be either of 'mean' or 'median'"
+        "mean",
+        "median",
+    }, "aggregate should be either of 'mean' or 'median'"
 
     if aggregate == "median":
         operator = partial(np.median, axis=-1)
@@ -540,14 +610,17 @@ def composite_rate_ratio_vs_phase(
             t_end += short_window_shift
             t_start += short_window_shift
 
-
     # ----------------------------------------------
-    # aggregate results
+    #           aggregate results
     # ----------------------------------------------
     seismicity_vs_forcing = {}
     for field1 in seismicity_vs_forcing_short_win[0]:
         # outer loop: if several forcing types
         seismicity_vs_forcing[field1] = {}
+        num_events = [
+            seismicity_vs_forcing_short_win[i][field1]["hist"].sum()
+            for i in range(num_short_windows)
+        ]
         for field2 in seismicity_vs_forcing_short_win[0][field1]:
             # inner loop: all the short-window quantities are aggregated
             #             into a single long-window estimate
@@ -557,9 +630,18 @@ def composite_rate_ratio_vs_phase(
                 [
                     seismicity_vs_forcing_short_win[i][field1][field2]
                     for i in range(num_short_windows)
+                    if num_events[i] >= min_num_events_in_short_window
                 ],
                 axis=-1,
             )
+            if all_windows.shape[-1] == 0:
+                print(
+                    "Could not find any short windows with more events"
+                    f"than min_num_events_in_short_window "
+                    f"(={min_num_events_in_short_window})"
+                )
+            if keep_short_windows:
+                seismicity_vs_forcing[field1][f"all_windows_{field2}"] = all_windows
             if field2 == "expected_rate":
                 seismicity_vs_forcing[field1][field2] = np.sum(
                     all_windows, axis=-1
@@ -575,9 +657,9 @@ def composite_rate_ratio_vs_phase(
             ]:
                 # aggregate with mean or median
                 # seismicity_vs_forcing[field1][f"{field2}"] = np.mean(all_windows, axis=-1)
-                #seismicity_vs_forcing[field1][f"{field2}"] = np.median(
+                # seismicity_vs_forcing[field1][f"{field2}"] = np.median(
                 #    all_windows, axis=-1
-                #)
+                # )
                 # error: std or mad, vs bootstrap error of `operator`
                 # seismicity_vs_forcing[field1][f"{field2}_err"] = np.median(
                 #     np.abs(
@@ -585,12 +667,47 @@ def composite_rate_ratio_vs_phase(
                 #     ),
                 #     axis=-1,
                 # )
+
                 (
-                    seismicity_vs_forcing[field1][f"{field2}"],
-                    seismicity_vs_forcing[field1][f"{field2}_err"],
+                   seismicity_vs_forcing[field1][f"{field2}"],
+                   seismicity_vs_forcing[field1][f"{field2}_err"],
                 ) = bootstrap_statistic(
-                    all_windows, operator, n_bootstraps=num_bootstrap_for_errors
+                   all_windows, operator, n_bootstraps=num_bootstrap_for_errors
                 )
+
+                # --------------------------------------
+                #    trying out different methods
+                # --------------------------------------
+                # filtered_mat = wiener(
+                #        all_windows,
+                #        mysize=(1, all_windows.shape[-1])
+                #        )
+                # seismicity_vs_forcing[field1][f"{field2}"] = np.mean(
+                #        filtered_mat, axis=-1
+                #        )
+                # filtered_mat = SVDWF(
+                #        all_windows.T, max_singular_values=1,
+                #        wiener_filter_colsize=all_windows.shape[-1],
+                #        )
+                # filtered_mat = spectral_filtering(all_windows.T)
+                # print(
+                #        filtered_mat[0, :] / filtered_mat[1, :],
+                #        filtered_mat[10, :] / filtered_mat[1, :],
+                #        )
+                ##seismicity_vs_forcing[field1][f"{field2}"] = filtered_mat.mean(0)
+                # norm = np.mean(filtered_mat, axis=1, keepdims=True)
+                # seismicity_vs_forcing[field1][f"{field2}"] = np.mean(
+                #        filtered_mat / norm, axis=0
+                #        )
+
+                first_singular_vector = get_singular_vector(
+                    all_windows.T, singular_value_index=0
+                )
+                seismicity_vs_forcing[field1][f"{field2}"] = (
+                    first_singular_vector / first_singular_vector.mean()
+                )
+                #if field2 == "rate_ratio":
+                #    plt.plot(seismicity_vs_forcing[field1][f"{field2}"])
             if (downsample > 0) and field2 in [
                 "observed_rate",
                 "rate_ratio",
@@ -945,7 +1062,6 @@ def fit_stress_hist(x, y, yerr):
     slope, intercept, slope_err = weighted_linear_regression(x, y, W=(1.0 / yerr) ** 2)
     intercept_err = 0.0
     return intercept, slope, intercept_err, slope_err
-
 
 
 def fit_stress_hist_scipy_l1(x, y, yerr):
@@ -1439,49 +1555,47 @@ def compute_instantaneous_phase_at_eq(
     eq_timings = catalog.loc[:, "t_eq_s"].values
     for field in fields:
         if f"unravelled_{field}" in tidal_stress:
-            #catalog.loc[indexes, field] = (
+            # catalog.loc[indexes, field] = (
             #    np.interp(
             #        catalog.loc[indexes, "t_eq_s"].values,
             #        tidal_stress["time_sec"].values,
             #        180.0 + tidal_stress[f"unravelled_{field}"].values,
             #    )
-            #) % 360.0 - 180.0
+            # ) % 360.0 - 180.0
             catalog = catalog.assign(
-                    tmp_name=np.interp(
-                        eq_timings,
-                        tidal_stress["time_sec"].values,
-                        180. + tidal_stress[f"unravelled_{field}"].values,
-                        ) % 360. - 180.,
+                tmp_name=np.interp(
+                    eq_timings,
+                    tidal_stress["time_sec"].values,
+                    180.0 + tidal_stress[f"unravelled_{field}"].values,
+                )
+                % 360.0
+                - 180.0,
             )
             if attach_unravelled_phase:
-                #catalog.loc[indexes, f"unravelled_{field}"] = np.interp(
+                # catalog.loc[indexes, f"unravelled_{field}"] = np.interp(
                 #    catalog.loc[indexes, "t_eq_s"].values,
                 #    tidal_stress["time_sec"].values,
                 #    tidal_stress[f"unravelled_{field}"].values,
-                #)
+                # )
                 catalog = catalog.assign(
-                        tmp_name2=np.interp(
-                            eq_timings,
-                            tidal_stress["time_sec"].values,
-                            tidal_stress[f"unravelled_{field}"].values,
-                            ),
+                    tmp_name2=np.interp(
+                        eq_timings,
+                        tidal_stress["time_sec"].values,
+                        tidal_stress[f"unravelled_{field}"].values,
+                    ),
                 )
                 catalog.rename(
-                        columns={"tmp_name2": f"unravelled_{field}"},
-                        inplace=True
+                    columns={"tmp_name2": f"unravelled_{field}"}, inplace=True
                 )
         else:
             catalog = catalog.assign(
-                    tmp_name=np.interp(
-                        eq_timings,
-                        tidal_stress["time_sec"].values,
-                        tidal_stress[field].values,
-                        ),
+                tmp_name=np.interp(
+                    eq_timings,
+                    tidal_stress["time_sec"].values,
+                    tidal_stress[field].values,
+                ),
             )
-        catalog.rename(
-                columns={"tmp_name": field},
-                inplace=True
-                )
+        catalog.rename(columns={"tmp_name": field}, inplace=True)
     return catalog
 
 
@@ -1518,20 +1632,17 @@ def unravel_phase(phases, degree=True):
 
 def compute_stress_at_eq(catalog, tidal_stress, fields):
     """Interpolate stress at earthquake timings."""
-    #indexes = catalog.index
+    # indexes = catalog.index
     eq_timings = catalog.loc[:, "t_eq_s"].values
     for f in fields:
         catalog = catalog.assign(
-                f=np.interp(
-                    eq_timings,
-                    tidal_stress["time_sec"].values,
-                    tidal_stress[f].values,
-                    ),
+            f=np.interp(
+                eq_timings,
+                tidal_stress["time_sec"].values,
+                tidal_stress[f].values,
+            ),
         )
-        catalog.rename(
-                columns={"f": f},
-                inplace=True
-                )
+        catalog.rename(columns={"f": f}, inplace=True)
     return catalog
 
 
@@ -1591,3 +1702,121 @@ def compute_fortnightly(catalog, tidal_stress, full_moons_path):
     catalog["fortnightly_phase"] = np.interp(
         catalog["t_eq_s"], tidal_stress["time_sec"], tidal_stress["fortnightly_phase"]
     )
+
+
+def SVDWF(
+    matrix,
+    expl_var=0.4,
+    max_singular_values=5,
+    wiener_filter_colsize=None,
+):
+    """
+    Implementation of the Singular Value Decomposition Wiener Filter (SVDWF)
+    described in Moreau et al 2017.
+
+    Parameters
+    ----------
+    matrix: (n x m) numpy array
+        n is the number of events, m is the number of time samples
+        per event.
+    n_singular_values: scalar float
+        Number of singular values to retain in the
+        SVD decomposition of matrix.
+    max_freq: scalar float, default to cfg.MAX_FREQ_HZ
+        The maximum frequency of the data, or maximum target
+        frequency, is used to determined the size in the
+        time axis of the Wiener filter.
+
+    Returns
+    --------
+    filtered_data: (n x m) numpy array
+        The matrix filtered through the SVD procedure.
+    """
+    from scipy.linalg import svd
+    from scipy.signal import wiener
+    import matplotlib.pyplot as plt
+
+    try:
+        U, S, Vt = svd(matrix, full_matrices=False)
+    except Exception as e:
+        print(e)
+        print("Problem while computing the svd...!")
+        return np.random.normal(loc=0.0, scale=1.0, size=matrix.shape)
+    if wiener_filter_colsize is None:
+        wiener_filter_colsize = U.shape[0]
+    # wiener_filter = [wiener_filter_colsize, int(cfg.SAMPLING_RATE_HZ/max_freq)]
+    wiener_filter = [wiener_filter_colsize, 1]
+    filtered_data = np.zeros((U.shape[0], Vt.shape[1]), dtype=np.float32)
+    # select the number of singular values
+    # in order to explain 100xn_singular_values%
+    # of the variance of the matrix
+    var = np.cumsum(S**2)
+    if var[-1] == 0.0:
+        # only zeros in matrix
+        return filtered_data
+    var /= var[-1]
+    n_singular_values = np.min(np.where(var >= expl_var)[0]) + 1
+    n_singular_values = min(max_singular_values, n_singular_values)
+    for n in range(min(U.shape[0], n_singular_values)):
+        s_n = np.zeros(S.size, dtype=np.float32)
+        s_n[n] = S[n]
+        projection_n = np.dot(U, np.dot(np.diag(s_n), Vt))
+        if wiener_filter[0] == 1 and wiener_filter[1] == 1:
+            # no wiener filtering
+            filtered_projection = projection_n
+        else:
+            # the following application of Wiener filtering is questionable: because each projection in this loop is a projection
+            # onto a vector space with one dimension, all the waveforms are colinear: they just differ by an amplitude factor (but same shape).
+            filtered_projection = wiener(
+                projection_n,
+                # mysize=[max(2, int(U.shape[0]/10)), int(cfg.SAMPLING_RATE_HZ/freqmax)]
+                mysize=wiener_filter,
+            )
+        # filtered_projection = projection_n
+        if np.isnan(filtered_projection.max()):
+            continue
+        filtered_data += filtered_projection
+    if wiener_filter[0] == 1 and wiener_filter[1] == 1:
+        # no wiener filtering
+        pass
+    else:
+        filtered_data = wiener(filtered_data, mysize=wiener_filter)
+    # remove nans or infs
+    filtered_data[np.isnan(filtered_data)] = 0.0
+    filtered_data[np.isinf(filtered_data)] = 0.0
+    return filtered_data
+
+
+def spectral_filtering(x, singular_value_index=0):
+    from scipy.linalg import svd
+
+    U, S, Vt = svd(x, full_matrices=False)
+    s_n = np.zeros(S.size, dtype=np.float32)
+    s_n[singular_value_index] = S[singular_value_index]
+    projection_n = np.dot(U, np.dot(np.diag(s_n), Vt))
+    return projection_n
+
+
+def get_singular_vector(x, singular_value_index=0):
+    from scipy.linalg import svd
+
+    import matplotlib.pyplot as plt
+
+    U, S, Vt = svd(x, full_matrices=False)
+    # s_n = np.zeros(S.size, dtype=np.float32)
+    # s_n[singular_value_index] = S[singular_value_index]
+    # projection_n = np.dot(U, np.dot(np.diag(s_n), Vt))
+
+    # coherence = np.abs(np.sum(np.sign(U), axis=0))
+    # singular_value_index = np.argsort(coherence)[::-1][singular_value_index]
+
+    # fig, ax = plt.subplots(figsize=(9, 9))
+    ##for i in range(Vt.shape[0]):
+    # for i in range(4):
+    #    sign = np.sign(np.sum(np.sign(U[:, i])))
+    #    ax.plot(sign * Vt[i, :] / np.abs(Vt[i, :]).mean())
+    # plt.show(block=True)
+
+    singular_vector = Vt[singular_value_index, :]
+    sign = np.sign(np.sum(np.sign(U[:, singular_value_index])))
+    return sign * singular_vector

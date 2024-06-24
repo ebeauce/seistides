@@ -49,27 +49,41 @@ def weighted_linear_regression(X, Y, W=None):
 #           Fit rate ratio vs phase
 # ----------------------------------------------------------
 
-def cosine_rate_ratio(x, alpha, phi):
-    return 1. + alpha * np.cos(x - phi)
 
-def fit_rate_ratio_vs_phase_bootstrap(x, y, y_err, num_bootstraps=10, objective="l2"):
+def cosine_rate_ratio(x, alpha, phi):
+    return 1.0 + alpha * np.cos(x - phi)
+
+def exp_rate_ratio(x, alpha, phi):
+    return np.exp(alpha * np.cos(x - phi))
+
+def fit_rate_ratio_vs_phase_bootstrap(
+    x, y, y_err, num_bootstraps=10, objective="l2", model="cosine"
+):
     """ """
     from scipy.optimize import minimize
+
+    assert model in {"cosine", "exp"}, "model should be either of 'cosine' or 'exp'"
 
     deg2rad = np.pi / 180.0
     x_ = x * deg2rad
 
+    if model == "cosine":
+        _model = cosine_rate_ratio
+        bounds = [(0.0, 1.0), (-np.pi, np.pi)]
+    elif model == "exp":
+        _model = exp_rate_ratio
+        bounds = [(0.0, 10.0), (-np.pi, np.pi)]
+
     if objective == "l2":
         # l2-norm
-        loss = lambda p, obs: np.sum(((1.0 + p[0] * np.cos(x_ - p[1])) - obs) ** 2)
+        loss = lambda p, obs: np.sum((_model(x_, *p) - obs) ** 2)
     elif objective == "l1":
         # l1-norm
-        loss = lambda p, obs: np.sum(np.abs((1.0 + p[0] * np.cos(x_ - p[1])) - obs))
+        loss = lambda p, obs: np.sum(np.abs(_model(x_, *p) - obs))
     elif objective == "negative-log-likelihood":
         # negative log-likelihood
-        loss = lambda p, obs: -np.sum(obs * np.log(1.0 + p[0] * np.cos(x_ - p[1])))
+        loss = lambda p, obs: -np.sum(obs * np.log(_model(x_, *p)))
     first_guess = (0.0, 0.0)
-    bounds = [(0.0, 1.0), (-np.pi, np.pi)]
 
     inverted_alpha = np.zeros(num_bootstraps, dtype=np.float32)
     inverted_phi = np.zeros(num_bootstraps, dtype=np.float32)
@@ -103,19 +117,6 @@ def fit_rate_ratio_vs_phase_bootstrap(x, y, y_err, num_bootstraps=10, objective=
     inverted_cos_phi = np.cos(inverted_phi)
     inverted_sin_phi = np.sin(inverted_phi)
     mean_phi = np.arctan2(np.mean(inverted_sin_phi), np.mean(inverted_cos_phi))
-    # diff_phi = np.minimum(
-    #     np.abs(inverted_phi[:, np.newaxis] - inverted_phi[np.newaxis, :]).flatten(),
-    #     np.abs(
-    #         2.0 * np.pi + inverted_phi[:, np.newaxis] - inverted_phi[np.newaxis, :]
-    #     ).flatten(),
-    #     np.abs(
-    #         inverted_phi[:, np.newaxis] - inverted_phi[np.newaxis, :] - 2.0 * np.pi
-    #     ).flatten(),
-    # )
-    # mean_alpha = np.sum(cost * inverted_alpha)
-    # mean_phi = np.arctan2(
-    #     np.sum(cost*inverted_sin_phi), np.sum(cost * inverted_cos_phi)
-    #     )
     diff = inverted_phi - mean_phi
     diff_phi = np.min(
         np.stack(
@@ -129,31 +130,27 @@ def fit_rate_ratio_vs_phase_bootstrap(x, y, y_err, num_bootstraps=10, objective=
         axis=1,
     )
     model_parameters = {
-            "alpha": np.mean(inverted_alpha),
-            "phi": mean_phi,
-            }
-    model_errors = {
-            "alpha_err": np.std(inverted_alpha),
-            "phi_err": np.mean(diff_phi)
-            }
+        "alpha": np.mean(inverted_alpha),
+        "phi": mean_phi,
+    }
+    model_errors = {"alpha_err": np.std(inverted_alpha), "phi_err": np.mean(diff_phi)}
     model_func = partial(
-            cosine_rate_ratio,
-            alpha=model_parameters["alpha"],
-            phi=model_parameters["phi"],
-            )
-    model = {
-            "parameters": model_parameters,
-            "errors": model_errors,
-            "func": model_func
-            }
+        _model,
+        alpha=model_parameters["alpha"],
+        phi=model_parameters["phi"],
+    )
+    model = {"parameters": model_parameters, "errors": model_errors, "func": model_func}
     return model
+
 
 # ----------------------------------------------------------
 #           Fit rate ratio vs stress
 # ----------------------------------------------------------
 
+
 def linear_func(x, a, b):
     return b + a * x
+
 
 def fit_rate_ratio_vs_stress_linear(x, y, yerr):
     """Least squares solution for linear regression.
@@ -165,26 +162,26 @@ def fit_rate_ratio_vs_stress_linear(x, y, yerr):
     slope, intercept, r, p, se = linregress(x, y)
 
     model_parameters = {
-            "slope": slope,
-            }
+        "slope": slope,
+    }
     model_errors = {
-            "slope_err": se,
-            }
+        "slope_err": se,
+    }
     model_func = partial(
-            linear_func,
-            a=slope,
-            b=intercept,
-            )
-    model = {
-            "parameters": model_parameters,
-            "errors": model_errors,
-            "func": model_func
-            }
+        linear_func,
+        a=slope,
+        b=intercept,
+    )
+    model = {"parameters": model_parameters, "errors": model_errors, "func": model_func}
     return model
 
-def rate_state(x, Asig_Pa):
+
+def rate_state(x, Asig_Pa, ln=False):
     """ """
-    return np.exp(x / Asig_Pa)
+    if ln:
+        return x / Asig_Pa
+    else:
+        return np.exp(x / Asig_Pa)
 
 def fit_rate_ratio_vs_stress_rate_state_bootstrap(x, y, y_err, num_bootstraps=100):
     """
@@ -211,23 +208,11 @@ def fit_rate_ratio_vs_stress_rate_state_bootstrap(x, y, y_err, num_bootstraps=10
 
     float
         The robust uncertainty estimate for the parameter.
-
-    Example:
-    --------
-    >>> import numpy as np
-
-    >>> x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-    >>> y = np.array([2.0, 4.0, 6.0, 8.0, 10.0])
-    >>> y_err = np.array([0.1, 0.2, 0.15, 0.3, 0.2])
-
-    >>> param_median, param_uncertainty = fit_rate_state_bootstrap(x, y, y_err, num_bootstraps=1000)
-    >>> print(param_median, param_uncertainty)
-    (1000.0, 100.0)
     """
-
     from scipy.optimize import minimize_scalar
+    from scipy.stats import linregress
 
-    bounds = (1.0, 3.0e5)
+    bounds = (1.0, 1.e7)
     W = 1.0 / y_err
     W /= W.sum()
     inverted_Asig_Pa = np.zeros(num_bootstraps, dtype=np.float32)
@@ -238,28 +223,28 @@ def fit_rate_ratio_vs_stress_rate_state_bootstrap(x, y, y_err, num_bootstraps=10
         # noisy y
         y_b = y_b * y_err + y
         # don't allow negative values (impossible)
-        y_b = np.maximum(y_b, 0.0)
-        y_b = y_b / np.mean(y_b)
-        loss = lambda Asig_Pa: np.sum(W * (y_b - rate_state(x, Asig_Pa)) ** 2)
-        results = minimize_scalar(loss, bounds=bounds, method="bounded")
-        inverted_Asig_Pa[n] = results.x
+        y_b = np.maximum(y_b, 0.0001)
+        # convert data to log and fit linear function
+        # note: inverting for a non-trivial intercept corrects
+        # for possible errors when finding the reference rate
+        # at sigma=0   :)
+        slope, intercept, r, p, se = linregress(x, np.log(y_b))
+        inverted_Asig_Pa[n] = 1. / slope
+
 
     model_parameters = {
-            "asig_kPa": np.median(inverted_Asig_Pa) / 1000.,
-            }
+        #"asig_kPa": np.median(inverted_Asig_Pa) / 1000.0,
+        "asig_kPa": np.mean(inverted_Asig_Pa) / 1000.0,
+    }
     model_errors = {
-            "asig_kPa_err": 1.48 * scimad(inverted_Asig_Pa) / 1000.,
-            }
+        "asig_kPa_err": 1.48 * scimad(inverted_Asig_Pa) / 1000.0,
+        "asig_kPa_2.5th": np.percentile(inverted_Asig_Pa, 2.5) / 1000.,
+        "asig_kPa_97.5th": np.percentile(inverted_Asig_Pa, 97.5) / 1000.,
+    }
     model_func = partial(
-            rate_state,
-            Asig_Pa=model_parameters["asig_kPa"] * 1000.,
-            )
-    model = {
-            "parameters": model_parameters,
-            "errors": model_errors,
-            "func": model_func
-            }
-
+        rate_state,
+        Asig_Pa=model_parameters["asig_kPa"] * 1000.0,
+    )
+    model = {"parameters": model_parameters, "errors": model_errors, "func": model_func}
 
     return model
-
