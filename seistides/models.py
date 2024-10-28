@@ -213,7 +213,8 @@ def fit_rate_ratio_vs_stress_rate_state_bootstrap(x, y, y_err, num_bootstraps=10
     from scipy.stats import linregress
 
     bounds = (1.0, 1.e7)
-    W = 1.0 / y_err
+    W = np.ones(len(y_err), dtype=y_err.dtype)
+    W[y_err != 0.] = 1. / y_err
     W /= W.sum()
     inverted_Asig_Pa = np.zeros(num_bootstraps, dtype=np.float32)
     for n in range(num_bootstraps):

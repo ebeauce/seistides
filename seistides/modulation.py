@@ -1,4 +1,5 @@
 import numpy as np
+import pickle
 import warnings
 
 from . import utils
@@ -179,6 +180,19 @@ class Modulationmeter(object):
     def set_catalog(self, catalog):
         self.catalog = catalog
 
+    def set_forcing(self, forcing):
+        self.forcing = forcing
+
+    def write(self, path):
+        with open(path, "wb") as fout:
+            pickle.dump(self, fout)
+
     @classmethod
     def _midbins(cls, bins):
         return (bins[1:] + bins[:-1]) / 2.0
+
+    @classmethod
+    def read(cls, path):
+        with open(path, "rb") as fin:
+            instance = pickle.load(fin)
+        return instance
