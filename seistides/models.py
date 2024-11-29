@@ -53,11 +53,16 @@ def weighted_linear_regression(X, Y, W=None):
 def cosine_rate_ratio(x, alpha, phi):
     return 1.0 + alpha * np.cos(x - phi)
 
-def exp_rate_ratio(x, alpha, phi):
-    return np.exp(alpha * np.cos(x - phi))
+def exp_rate_ratio(x, alpha, phi, C=1.):
+    return C * np.exp(alpha * np.cos(x - phi))
 
 def fit_rate_ratio_vs_phase_bootstrap(
-    x, y, y_err, num_bootstraps=10, objective="l2", model="cosine"
+    x, y, y_err,
+    num_bootstraps=10,
+    objective="l2",
+    model="cosine",
+    y_err_min=0.,
+    invert_norm=False
 ):
     """ """
     from scipy.optimize import minimize
@@ -73,6 +78,8 @@ def fit_rate_ratio_vs_phase_bootstrap(
     elif model == "exp":
         _model = exp_rate_ratio
         bounds = [(0.0, 10.0), (-np.pi, np.pi)]
+    if invert_norm:
+        bounds = bounds + [(0., 10.)]
 
     if objective == "l2":
         # l2-norm
@@ -83,26 +90,29 @@ def fit_rate_ratio_vs_phase_bootstrap(
     elif objective == "negative-log-likelihood":
         # negative log-likelihood
         loss = lambda p, obs: -np.sum(obs * np.log(_model(x_, *p)))
-    first_guess = (0.0, 0.0)
 
     inverted_alpha = np.zeros(num_bootstraps, dtype=np.float32)
     inverted_phi = np.zeros(num_bootstraps, dtype=np.float32)
+    if invert_norm:
+        inverted_C = np.zeros(num_bootstraps, dtype=np.float32)
     n = 0
     while n < num_bootstraps:
         # generate random sample assuming that each bin [i] of the histogram
         # is normally distributed with mean y[i] and std y_err[i]
         y_b = np.random.normal(loc=0.0, scale=1.0, size=len(y))
         # noisy y
-        y_b = y_b * y_err + y
+        y_b = y_b * np.maximum(y_err, y_err_min) + y
         # don't allow negative values (impossible)
         y_b = np.maximum(y_b, 0.0)
         # normalized noisy y
-        y_b = y_b / np.mean(y_b)
+        #y_b = y_b / np.mean(y_b)
         # first_guess = (0.02 * np.random.random(), 2. * np.pi * np.random.random() - np.pi)
         first_guess = (
             0.05 * np.random.random(),
             np.pi * np.random.random() - np.pi / 2.0,
         )
+        if invert_norm:
+            first_guess = first_guess + (1.,)
         optimization_results = minimize(
             loss,
             first_guess,
@@ -111,6 +121,8 @@ def fit_rate_ratio_vs_phase_bootstrap(
         )
         inverted_alpha[n] = optimization_results.x[0]
         inverted_phi[n] = optimization_results.x[1]
+        if invert_norm:
+            inverted_C[n] = optimization_results.x[2]
         if inverted_alpha[n] == 0:
             continue
         n += 1
@@ -133,11 +145,18 @@ def fit_rate_ratio_vs_phase_bootstrap(
         "alpha": np.mean(inverted_alpha),
         "phi": mean_phi,
     }
-    model_errors = {"alpha_err": np.std(inverted_alpha), "phi_err": np.mean(diff_phi)}
+    model_errors = {
+            "alpha_err": np.std(inverted_alpha),
+            "phi_err": np.mean(diff_phi),
+            }
+    if invert_norm:
+        model_parameters["C"] = np.mean(inverted_C)
+        model_errors["C_err"] = np.std(inverted_C)
     model_func = partial(
         _model,
         alpha=model_parameters["alpha"],
         phi=model_parameters["phi"],
+        C=model_parameters["C"] if invert_norm else 1.
     )
     model = {"parameters": model_parameters, "errors": model_errors, "func": model_func}
     return model
