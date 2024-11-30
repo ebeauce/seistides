@@ -148,6 +148,8 @@ def bin_eq_tidal_phases(
         "instantaneous_phase_normal",
         "instantaneous_phase_coulomb",
     ],
+    clip_rate_ratio_above=None,
+    clip_rate_ratio_below=None,
 ):
     """Count number of earthquakes in phase bins.
 
@@ -241,6 +243,19 @@ def bin_eq_tidal_phases(
             print("expected rate", seismicity_vs_phase[f]["expected_rate"])
             print("hist", tidal_phase_hist)
             print("data", tidal_stress[f])
+        mean = np.mean(rate_ratio)
+        if clip_rate_ratio_above is not None:
+            if mean != 0.:
+                clip_rate_ratio_above = clip_rate_ratio_above / mean
+            rate_ratio = np.clip(
+                    rate_ratio, a_min=0., a_max=clip_rate_ratio_above
+                    )
+        if clip_rate_ratio_below is not None:
+            if mean != 0.:
+                clip_rate_ratio_below = clip_rate_ratio_below / mean
+            rate_ratio = np.clip(
+                    rate_ratio, a_min=clip_rate_ratio_below, a_max=rate_ratio.max()
+                    )
         # normalization so that the ratio vector sums up to 1.
         norm = np.mean(rate_ratio)
         if norm != 0.0:
@@ -591,19 +606,22 @@ def composite_rate_ratio_vs_phase(
     tidal_stress,
     window_time,
     forcing_name,
+    phase_bins={},
     window_type="backward",
     fortnightly_phase=None,
     nbins=36,
     short_window_days=3 * 30,
     num_short_windows=8,
     overlap=0.0,
-    phase_bins={},
     downsample=0,
     num_bootstrap_for_errors=100,
     aggregate="median",
     wiener_filter=None,
     min_num_events_in_short_window=10,
+    min_fraction_of_valid_windows=0.50,
     keep_short_windows=False,
+    clip_rate_ratio_above=None,
+    clip_rate_ratio_below=None,
     progress=False,
 ):
     """Count number of earthquakes in phase bins with bootstrapping analysis.
@@ -669,6 +687,9 @@ def composite_rate_ratio_vs_phase(
 
     short_window_dur = relativedelta(days=short_window_days)
     short_window_shift = relativedelta(days=int((1.0 - overlap) * short_window_days))
+    min_num_valid_short_windows = int(
+            min_fraction_of_valid_windows * num_short_windows
+            )
     seismicity_vs_forcing_short_win = []
 
     if window_type == "backward":
@@ -697,6 +718,8 @@ def composite_rate_ratio_vs_phase(
                 phase_bins=phase_bins,
                 fields=[forcing_name],
                 nbins=nbins,
+                clip_rate_ratio_above=clip_rate_ratio_above,
+                clip_rate_ratio_below=clip_rate_ratio_below,
             )
         )
         if window_type == "backward":
@@ -712,18 +735,28 @@ def composite_rate_ratio_vs_phase(
     seismicity_vs_forcing = {}
     for field1 in seismicity_vs_forcing_short_win[0]:
         # outer loop: if several forcing types
-        seismicity_vs_forcing[field1] = {}
         num_events = [
             seismicity_vs_forcing_short_win[i][field1]["hist"].sum()
             for i in range(num_short_windows)
         ]
+        valid_window = np.array(num_events) >= min_num_events_in_short_window
+        num_valid_windows = np.sum(valid_window)
+        if num_valid_windows == 0:
+            print(f"Could not find a single valid window for {field1}")
+            continue
+        if num_valid_windows < min_num_valid_short_windows:
+            print(f"Not enough valid windows (found {num_valid_windows}, "
+                  f"required {min_num_valid_short_windows})")
+            continue
+        seismicity_vs_forcing[field1] = {}
+
         # define weights proportionally to expected_rate, because expected_rate
         # is itself proportional to the time interval covered by the forcing bin
         weights = np.stack(
                 [
                     seismicity_vs_forcing_short_win[i][field1]["expected_rate"]
                     for i in range(num_short_windows)
-                    if num_events[i] >= min_num_events_in_short_window
+                    if valid_window[i]
                 ],
                 axis=-1,
             )
@@ -741,23 +774,31 @@ def composite_rate_ratio_vs_phase(
                 [
                     seismicity_vs_forcing_short_win[i][field1][field2]
                     for i in range(num_short_windows)
-                    if num_events[i] >= min_num_events_in_short_window
+                    if valid_window[i]
                 ],
                 axis=-1,
             )
-            if all_windows.shape[-1] == 0:
-                print(
-                    "Could not find any short windows with more events"
-                    f"than min_num_events_in_short_window "
-                    f"(={min_num_events_in_short_window})"
-                )
+
             if wiener_filter is not None:
                 win_indexes = np.arange(all_windows.shape[1])
                 np.random.shuffle(win_indexes)
                 # robust estimation of noise with MAD
-                noise_power = 1.48 * np.median(
-                        np.abs(all_windows - np.median(all_windows))
+                mad_across_windows = 1.48 * np.median(
+                        np.abs(all_windows - np.median(all_windows, axis=1, keepdims=True)),
+                        axis=1
                         )
+                # fill in zeros with default value (this shouldn't really matter
+                # because cases with mad=0 are cases that are equally zero everywhere)
+                mad_across_windows[mad_across_windows == 0.] = 0.2
+                
+                noise_power = np.median(mad_across_windows) ** 2
+                #noise_power = 1.48 * np.median(
+                #        np.abs(all_windows - np.median(all_windows))
+                #        )
+                #print(1.48 * np.median(
+                #        np.abs(all_windows - np.median(all_windows))
+                #        ))
+
                 half_wiener_win = (
                         wiener_filter[0] // 2 + wiener_filter[0] % 2,
                         wiener_filter[1] // 2 + wiener_filter[1] % 2,
@@ -780,6 +821,8 @@ def composite_rate_ratio_vs_phase(
                 if half_wiener_win[1] > 0:
                     all_windows = all_windows[:, half_wiener_win[1]:-half_wiener_win[1]]
 
+            if np.sum(np.isnan(all_windows)) > 0:
+                breakpoint()
 
             if keep_short_windows:
                 seismicity_vs_forcing[field1][f"all_windows_{field2}"] = all_windows
@@ -907,7 +950,10 @@ def composite_rate_ratio_vs_phase(
             seismicity_vs_forcing[field1][field2] /= np.sum(
                 seismicity_vs_forcing[field1][field2]
             )
-    return seismicity_vs_forcing
+    if len(seismicity_vs_forcing) == 0:
+        return None
+    else:
+        return seismicity_vs_forcing
 
 
 def bootstrap_statistic(x, operator, n_bootstraps=100):
@@ -1416,7 +1462,7 @@ def load_tidal_stress(
 
     # calendar time of stress time series
     time = pd.Series(
-        pd.date_range(start=starttime, freq=f"{delta/3600.}H", periods=n_samples)
+        pd.date_range(start=starttime, freq=f"{delta/3600.}h", periods=n_samples)
     )
     tvec_tide = np.arange(0, n_samples) * delta + tref
 
@@ -1710,27 +1756,19 @@ def get_singular_vector(x, singular_value_index=0):
     """
     from scipy.linalg import svd
 
-    import matplotlib.pyplot as plt
-
-    #U, S, Vt = svd(x.T, full_matrices=False)
     V, S, Ut = svd(x, full_matrices=False)
-    # s_n = np.zeros(S.size, dtype=np.float32)
-    # s_n[singular_value_index] = S[singular_value_index]
-    # projection_n = np.dot(U, np.dot(np.diag(s_n), Vt))
-
-    # coherence = np.abs(np.sum(np.sign(U), axis=0))
-    # singular_value_index = np.argsort(coherence)[::-1][singular_value_index]
-
-    # fig, ax = plt.subplots(figsize=(9, 9))
-    ##for i in range(Vt.shape[0]):
-    # for i in range(4):
-    #    sign = np.sign(np.sum(np.sign(U[:, i])))
-    #    ax.plot(sign * Vt[i, :] / np.abs(Vt[i, :]).mean())
-    # plt.show(block=True)
-
-    #singular_vector = Vt[singular_value_index, :]
-    #sign = np.sign(np.sum(np.sign(U[:, singular_value_index])))
 
     singular_vector = V[:, singular_value_index]
     sign = np.sign(np.sum(np.sign(Ut[singular_value_index, :])))
     return sign * singular_vector
+
+def compute_AIC(residuals, num_params):
+    """Akaike Information Criterion for least-squares solution.
+    """
+    num_samples = len(residuals)
+    return (
+        num_samples * np.log(2. * np.pi) 
+        + num_samples * np.log(np.sum(residuals**2) / num_samples)
+        + num_samples
+        + 2 * num_params
+    )
