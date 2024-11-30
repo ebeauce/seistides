@@ -89,16 +89,6 @@ class Modulationmeter(object):
         -----
         If `forcing_name` is not found in `self.modulation` or `self.model`, a warning is issued,
         and `None` is returned for all outputs.
-
-        Examples
-        --------
-        >>> time, params, errs = obj.get_parameter_time_series("temperature")
-        >>> print(time)
-        [0, 1, 2, 3, 4, 5]
-        >>> print(params)
-        {'param1': [val1, val2, ...], 'param2': [val1, val2, ...], ...}
-        >>> print(errs)
-        {'err1': [val1, val2, ...], 'err2': [val1, val2, ...], ...}
         """
 
         if forcing_name not in self.modulation:
@@ -125,6 +115,47 @@ class Modulationmeter(object):
                 errors[err].append(_mod["errors"][err])
         return time, parameters, errors
 
+    def get_model_performance_time_series(self, forcing_name, model_name="model1"):
+        """
+        Retrieve time series of parameters and errors for a given forcing and model.
+
+        Parameters
+        ----------
+        forcing_name : str
+            The name of the forcing.
+        model_name : str, optional
+            The name of the model. Default is "model1".
+
+        Returns
+        -------
+        time : list
+            Sorted list of time points.
+        performance_metrics : dict
+            Dictionary containing performance metric time series.
+
+        Notes
+        -----
+        If `forcing_name` is not found in `self.modulation` or `self.model`, a warning is issued,
+        and `None` is returned for all outputs.
+        """
+
+        if forcing_name not in self.modulation:
+            warnings.warn(f"{forcing_name} not in self.modulation")
+            return
+        if forcing_name not in self.model:
+            warnings.warn(f"{forcing_name} not in self.model")
+            return
+        time = []
+        for t in self.modulation[forcing_name]:
+            time.append(t)
+        time.sort()
+        performance_metrics = {"delta_aic": [], "rms_residual": []}
+        for t in time:
+            _mod = self.model[forcing_name][t][model_name]
+            performance_metrics["delta_aic"].append(_mod["delta_aic"])
+            performance_metrics["rms_residual"].append(_mod["rms_residual"])
+        return time, performance_metrics
+
     def fit_modulation(
         self, func, window_time, forcing_name, model_name="model1", **kwargs
     ):
@@ -138,6 +169,42 @@ class Modulationmeter(object):
             self.modulation[forcing_name][window_time]["rate_ratio"],
             self.modulation[forcing_name][window_time]["rate_ratio_err"],
             **kwargs,
+        )
+
+    def evaluate_aic(self, window_time, forcing_name, model_name="model1"):
+        """ """
+        if (
+            forcing_name not in self.model
+            or window_time not in self.model[forcing_name]
+            or model_name not in self.model[forcing_name][window_time]
+        ):
+            print(
+                f"Could not find {model_name} at self.model[{forcing_name}][{window_time}]"
+            )
+            print("Call self.fit_modulation first.")
+            return
+        obs = self.modulation[forcing_name][window_time]["rate_ratio"]
+        proposed_model = self.model[forcing_name][window_time][model_name]["func"](
+            np.deg2rad(self.modulation[forcing_name][window_time]["midbins"])
+        )
+        residuals_proposed_model = obs - proposed_model
+        num_params = len(
+            self.model[forcing_name][window_time][model_name]["parameters"]
+        )
+        residuals_null_hypothesis = obs - 1.0
+        self.model[forcing_name][window_time][model_name]["aic"] = utils.compute_AIC(
+            residuals_proposed_model, num_params
+        )
+        self.model[forcing_name][window_time][model_name]["aic_null"] = (
+            utils.compute_AIC(residuals_null_hypothesis, 0)
+        )
+        # if this is positive, the proposed model is preferred over the null hypothesis
+        self.model[forcing_name][window_time][model_name]["delta_aic"] = (
+            self.model[forcing_name][window_time][model_name]["aic_null"]
+            - self.model[forcing_name][window_time][model_name]["aic"]
+        )
+        self.model[forcing_name][window_time][model_name]["rms_residual"] = np.std(
+            residuals_proposed_model
         )
 
     def measure_modulation(self, func, window_time, forcing_name, **kwargs):

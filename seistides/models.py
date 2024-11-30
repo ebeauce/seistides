@@ -50,8 +50,8 @@ def weighted_linear_regression(X, Y, W=None):
 # ----------------------------------------------------------
 
 
-def cosine_rate_ratio(x, alpha, phi):
-    return 1.0 + alpha * np.cos(x - phi)
+def cosine_rate_ratio(x, alpha, phi, C=1.):
+    return C * (1.0 + alpha * np.cos(x - phi))
 
 def exp_rate_ratio(x, alpha, phi, C=1.):
     return C * np.exp(alpha * np.cos(x - phi))
@@ -268,3 +268,4 @@ def fit_rate_ratio_vs_stress_rate_state_bootstrap(x, y, y_err, num_bootstraps=10
     model = {"parameters": model_parameters, "errors": model_errors, "func": model_func}
 
     return model
+
