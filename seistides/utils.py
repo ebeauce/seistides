@@ -15,6 +15,84 @@ from tqdm import tqdm
 
 FORTNIGHTLY_PHASES = ["rising fortnightly", "falling fortnightly", "entire lunar cycle"]
 
+#def _bootstrap_estimate_r(forcingtime_bins, phase_bin_idx, num_bootstraps):
+#    selected_forcingtime_bin_indexes = np.where(
+#            forcingtime_bins["forcing_leftbin_membership"] == phase_bin_idx
+#            )[0]
+#    rates = np.zeros(num_bootstraps)
+#    counts = np.zeros(num_bootstraps)
+#    durations = np.zeros(num_bootstraps)
+#    for i in tqdm(range(num_bootstraps)):
+#        indexes_b = np.random.choice(
+#                selected_forcingtime_bin_indexes, len(selected_forcingtime_bin_indexes), replace=True
+#                )
+#        rates[i] = forcingtime_bins.iloc[indexes_b]["forcingtime_bin_count"].sum() / forcingtime_bins.iloc[indexes_b]["forcingtime_bin_duration_sec"].sum()
+#        counts[i] = forcingtime_bins.iloc[indexes_b]["forcingtime_bin_count"].sum()
+#        durations[i] = forcingtime_bins.iloc[indexes_b]["forcingtime_bin_duration_sec"].sum()
+#    return rates, counts, durations
+
+def estimate_rate_forcingtime_bins(
+        cat,
+        forcingtime_bins,
+        forcing_bin_edges,
+        num_bootstraps=100,
+        normalize=True,
+        ):
+    num_bins = len(forcing_bin_edges) - 1
+
+    rate_vs_forcing = np.zeros(num_bins)
+    rate_vs_forcing_std = np.zeros(num_bins)
+    count_vs_forcing = np.zeros(num_bins)
+    count_vs_forcing_std = np.zeros(num_bins)
+    duration_vs_forcing = np.zeros(num_bins)
+    duration_vs_forcing_std = np.zeros(num_bins)
+
+    for i in range(num_bins):
+        bin_edge_idx = i + 1
+        selected_forcingtime_bin_indexes = np.where(
+                forcingtime_bins["forcing_leftbin_membership"] == bin_edge_idx
+                )[0]
+        rates = np.zeros(num_bootstraps)
+        counts = np.zeros(num_bootstraps)
+        durations = np.zeros(num_bootstraps)
+        for j in range(num_bootstraps):
+            indexes_b = np.random.choice(
+                    selected_forcingtime_bin_indexes,
+                    len(selected_forcingtime_bin_indexes),
+                    replace=True
+                    )
+            rates[j] = (
+                    forcingtime_bins.iloc[indexes_b]["forcingtime_bin_count"].sum()
+                    / forcingtime_bins.iloc[indexes_b]["forcingtime_bin_duration_sec"].sum()
+                    )
+            counts[j] = forcingtime_bins.iloc[indexes_b]["forcingtime_bin_count"].sum()
+            durations[j] = forcingtime_bins.iloc[indexes_b]["forcingtime_bin_duration_sec"].sum()
+        variance_stabilized_r = np.sqrt(rates)
+        robust_mean_estimate = np.median(
+                variance_stabilized_r[variance_stabilized_r > 0.]
+                )
+        robust_mean_rate = robust_mean_estimate**2
+        rate_vs_forcing[i] = robust_mean_rate
+        rate_vs_forcing_std[i] = np.std(rates)
+        count_vs_forcing[i] = np.median(counts)
+        count_vs_forcing_std[i] = np.std(counts)
+        duration_vs_forcing[i] = np.median(durations)
+        duration_vs_forcing_std[i] = np.std(durations)
+
+    if normalize:
+        norm = rate_vs_forcing.mean()
+        if norm > 0.:
+            rate_vs_forcing /= norm
+            rate_vs_forcing_std /= norm
+    output = {
+            "relative_rate": rate_vs_forcing,
+            "relative_rate_err": rate_vs_forcing_std,
+            "event_count": count_vs_forcing,
+            "event_count_err": count_vs_forcing_std,
+            "bin_duration": duration_vs_forcing,
+            "bin_duration_err": duration_vs_forcing_std,
+            }
+    return output
 
 def bin_eq_tidal_stresses(
     cat,
