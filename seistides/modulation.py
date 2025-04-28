@@ -321,21 +321,28 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
             }
             self.forcingtime_bins[forcing_name] = pd.DataFrame(forcingtime_bins)
 
-    def count_events_in_forcingtime_bins(self):
+    def count_events_in_forcingtime_bins(self, attach_membership_to_cat=False):
         for forcing_name in self.forcing_bins:
             forcingtime_bin_eq_membership = np.digitize(
                 self.catalog["t_eq_s"].values,
                 self.forcingtime_bins[forcing_name]["forcingtime_bin_time_edges_sec"],
             )
+            if attach_membership_to_cat:
+                self.catalog[f"membership_{forcing_name}"] = forcingtime_bin_eq_membership
             forcingtime_bin_values, forcingtime_bin_counts = np.unique(
                 forcingtime_bin_eq_membership, return_counts=True
             )
+            #breakpoint()
             self.forcingtime_bins[forcing_name].loc[
                 forcingtime_bin_values, "forcingtime_bin_count"
             ] = forcingtime_bin_counts
-            self.forcingtime_bins[forcing_name].loc[:, "forcingtime_bin_count"].fillna(
-                0, inplace=True
-            )
+            #self.forcingtime_bins[forcing_name].loc[:, "forcingtime_bin_count"].fillna(
+            #    0, inplace=True
+            #)
+            self.forcingtime_bins[forcing_name].fillna(
+                    {"forcingtime_bin_count": 0}, inplace=True
+                    )
+
             # first row is just here to indicate beginning of first forcingtime bin,
             # but because each row gives stats for bin to the left,
             # the first row has no stat by construction
@@ -408,6 +415,7 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
             subforcingtime_bins,
             self.forcing_bins[forcing_name],
             num_bootstraps=kwargs.get("num_bootstraps", 100),
+            num_std_cutoff=kwargs.get("num_std_cutoff", 0.)
         )
 
         if modulation is None:
