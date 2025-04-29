@@ -286,7 +286,7 @@ def linear_func(x, a, b):
     return b + a * x
 
 
-def fit_rate_ratio_vs_stress_linear(x, y, yerr):
+def fit_relative_rate_vs_stress_linear(x, y, yerr):
     """Least squares solution for linear regression.
 
     This routine uses scipy.stats's linregress function.
@@ -317,7 +317,7 @@ def rate_state(x, Asig_Pa, ln=False):
     else:
         return np.exp(x / Asig_Pa)
 
-def fit_rate_ratio_vs_stress_rate_state_bootstrap(x, y, y_err, num_bootstraps=100):
+def fit_relative_rate_vs_stress_rate_state_bootstrap(x, y, y_err, num_bootstraps=100):
     """
     Fit a rate-state model to data with bootstrapping.
 

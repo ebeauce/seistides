@@ -171,7 +171,7 @@ class Modulationmeter(ABC):
 
     def fit_modulation(
         self, func, window_time, forcing_name, model_name="model1",
-        quantity="rate_ratio", **kwargs
+        quantity="relative_rate", **kwargs
     ):
         """ """
         if forcing_name not in self.model:
@@ -187,7 +187,7 @@ class Modulationmeter(ABC):
 
     def evaluate_aic(
             self, window_time, forcing_name,
-            quantity="rate_ratio", model_name="model1"
+            quantity="relative_rate", model_name="model1"
             ):
         """ """
         if (
@@ -334,13 +334,9 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
             forcingtime_bin_values, forcingtime_bin_counts = np.unique(
                 forcingtime_bin_eq_membership, return_counts=True
             )
-            #breakpoint()
             self.forcingtime_bins[forcing_name].loc[
                 forcingtime_bin_values, "forcingtime_bin_count"
             ] = forcingtime_bin_counts
-            #self.forcingtime_bins[forcing_name].loc[:, "forcingtime_bin_count"].fillna(
-            #    0, inplace=True
-            #)
             self.forcingtime_bins[forcing_name].fillna(
                     {"forcingtime_bin_count": 0}, inplace=True
                     )
@@ -364,22 +360,6 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 "You need to define the `forcing` attribute. See `set_forcing`."
             )
             return
-
-        ## -----------------------------------------------
-        ## here, write func(args, kwargs) appropriately
-        ## for example:
-        # modulation = func(
-        #    self.catalog,
-        #    self.forcing,
-        #    window_time,
-        #    forcing_name,
-        #    short_window_days=self.short_window_days,
-        #    num_short_windows=self.num_short_windows,
-        #    overlap=self.overlap,
-        #    downsample=self.downsample,
-        #    **kwargs,
-        # )
-        ## -----------------------------------------------
 
         # -----------------------------------------------
         #                define window
