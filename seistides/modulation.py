@@ -15,6 +15,7 @@ class Modulationmeter(ABC):
         downsample=None,
         catalog=None,
         forcing=None,
+        forcing_bins=None,
         window_type="backward",
     ):
         """
@@ -30,6 +31,7 @@ class Modulationmeter(ABC):
         self.downsample = downsample
         self.catalog = catalog
         self.forcing = forcing
+        self.forcing_bins = forcing_bins
         self.window_type = window_type
         self.modulation = {}
         self.model = {}
@@ -257,10 +259,10 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
         super().__init__(
             catalog=catalog,
             forcing=forcing,
+            forcing_bins=forcing_bins,
             downsample=downsample,
             window_type=window_type,
         )
-        self.forcing_bins = forcing_bins
         self.window_duration_days = window_duration_days
 
     @property
@@ -441,6 +443,7 @@ class ModulationmeterMultiWindows(Modulationmeter):
         downsample=None,
         catalog=None,
         forcing=None,
+        forcing_bins=None,
         window_type="backward",
     ):
         """
@@ -454,6 +457,7 @@ class ModulationmeterMultiWindows(Modulationmeter):
             forcing=forcing,
             downsample=downsample,
             window_type=window_type,
+            forcing_bins=forcing_bins,
         )
         self.short_window_days = short_window_days
         self.num_short_windows = num_short_windows
@@ -492,9 +496,9 @@ class ModulationmeterMultiWindows(Modulationmeter):
 
         modulation = func(
             self.catalog,
-            self.forcing,
+            self.forcing[forcing_name],
+            self.forcing_bins[forcing_name],
             window_time,
-            forcing_name,
             short_window_days=self.short_window_days,
             num_short_windows=self.num_short_windows,
             overlap=self.overlap,
@@ -509,7 +513,8 @@ class ModulationmeterMultiWindows(Modulationmeter):
 
         if forcing_name not in self.modulation:
             self.modulation[forcing_name] = {}
-        self.modulation[forcing_name][window_time] = modulation[forcing_name]
+        self.modulation[forcing_name][window_time] = modulation
         self.modulation[forcing_name][window_time]["midbins"] = self._midbins(
             self.modulation[forcing_name][window_time]["bins"]
         )
+
