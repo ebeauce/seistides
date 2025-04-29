@@ -13,22 +13,6 @@ except ImportError:
     from scipy.stats import median_abs_deviation as scimad
 from tqdm import tqdm
 
-# def _bootstrap_estimate_r(forcingtime_bins, phase_bin_idx, num_bootstraps):
-#    selected_forcingtime_bin_indexes = np.where(
-#            forcingtime_bins["forcing_leftbin_membership"] == phase_bin_idx
-#            )[0]
-#    rates = np.zeros(num_bootstraps)
-#    counts = np.zeros(num_bootstraps)
-#    durations = np.zeros(num_bootstraps)
-#    for i in tqdm(range(num_bootstraps)):
-#        indexes_b = np.random.choice(
-#                selected_forcingtime_bin_indexes, len(selected_forcingtime_bin_indexes), replace=True
-#                )
-#        rates[i] = forcingtime_bins.iloc[indexes_b]["forcingtime_bin_count"].sum() / forcingtime_bins.iloc[indexes_b]["forcingtime_bin_duration_sec"].sum()
-#        counts[i] = forcingtime_bins.iloc[indexes_b]["forcingtime_bin_count"].sum()
-#        durations[i] = forcingtime_bins.iloc[indexes_b]["forcingtime_bin_duration_sec"].sum()
-#    return rates, counts, durations
-
 
 def estimate_rate_forcingtime_bins(
     cat,
@@ -36,7 +20,6 @@ def estimate_rate_forcingtime_bins(
     forcing_bin_edges,
     num_bootstraps=100,
     num_std_cutoff=0.0,
-    normalize=True,
 ):
     num_bins = len(forcing_bin_edges) - 1
 
@@ -52,23 +35,21 @@ def estimate_rate_forcingtime_bins(
             r_ = forcingtime_bins["forcingtime_bin_rate"]
         else:
             r_ = (
-                    forcingtime_bins["forcingtime_bin_count"] / 
-                    forcingtime_bins["forcingtime_bin_duration_sec"]
-                    )
+                forcingtime_bins["forcingtime_bin_count"]
+                / forcingtime_bins["forcingtime_bin_duration_sec"]
+            )
         mean_ = r_.mean()
         std_ = r_.std()
-        anomalous = (
-            r_ > mean_ + num_std_cutoff * std_
-        )
+        anomalous = r_ > mean_ + num_std_cutoff * std_
         forcingtime_bins = forcingtime_bins[~anomalous]
 
     for i in range(num_bins):
         bin_edge_idx = i + 1
         selected_forcingtime_bin_indexes = np.where(
             (forcingtime_bins["forcing_leftbin_membership"] == bin_edge_idx)
-            #& ~anomalous
+            # & ~anomalous
         )[0]
-        #if num_std_cutoff > 0.0:
+        # if num_std_cutoff > 0.0:
         #    mean_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
         #        "forcingtime_bin_count"
         #    ].mean()
@@ -120,18 +101,19 @@ def estimate_rate_forcingtime_bins(
         duration_vs_forcing[i] = np.median(durations)
         duration_vs_forcing_std[i] = np.std(durations)
 
-    if normalize:
-        # norm = rate_vs_forcing.mean()
-        norm = (
-            forcingtime_bins["forcingtime_bin_count"].sum()
-            / forcingtime_bins["forcingtime_bin_duration_sec"].sum()
-        )
-        if norm > 0.0:
-            rate_vs_forcing /= norm
-            rate_vs_forcing_std /= norm
+    average_rate = (
+        forcingtime_bins["forcingtime_bin_count"].sum()
+        / forcingtime_bins["forcingtime_bin_duration_sec"].sum()
+    )
+    if average_rate == 0.0:
+        average_rate = 1.0
+
+    # can re-work to return expected_rate and observed_rate
     output = {
-        "relative_rate": rate_vs_forcing,
-        "relative_rate_err": rate_vs_forcing_std,
+        "relative_rate": rate_vs_forcing / average_rate,
+        "relative_rate_err": rate_vs_forcing_std / average_rate,
+        "observed_rate": rate_vs_forcing,
+        "observed_rate_err": rate_vs_forcing_std,
         "event_count": count_vs_forcing,
         "event_count_err": count_vs_forcing_std,
         "bin_duration": duration_vs_forcing,
@@ -140,120 +122,7 @@ def estimate_rate_forcingtime_bins(
     return output
 
 
-def bin_eq_tidal_stresses(
-    cat,
-    forcing,
-    forcing_bin_edges,
-    clip_relative_rate_above=None,
-    clip_relative_rate_below=None,
-):
-    """Count number of earthquakes in stress bins.
-
-    Parameters
-    -----------
-    cat : `pandas.DataFrame`
-        Earthquake catalog.
-    tidal_stress : `pandas.DataFrame`
-        All tidal stress fields.
-    nbins : int, optional
-        Number of default stress bins if `stress_bins` is not provided.
-        Defaults to 6.
-    stress_bins : dict, optional
-        Dictionary providing the stress bins, e.g.
-        `stress_bins["shear_stress_bins"] = [-1000, -800, ..., 800, 1000]`
-        Defaults to '{}'.
-    fields : list of str, optional
-        List of stress components to explore.
-
-    Returns
-    --------
-    seismicity_vs_stress : dict
-        For each stress component given in 'fields', a dictionary is given
-        with the following attributes:
-        - "hist": Histogram of stress values at earthquake times.
-        - "bins": Bins of the histogram.
-        - "expected_rate": Fraction of the time axis covered by each stress
-                           bin. For example, large tidal stress values are
-                           rare so the associated stress bin covers a small
-                           fraction of the time axis and even in the case of
-                           tide-independent seismicity one expects
-                           significantly less earthquakes in these stress bins.
-        - "observed_rate": "stress_hist" normalized by the total number of
-                           earthquakes.
-    """
-
-    seismicity_vs_stress = {}
-    for f in fields:
-        seismicity_vs_stress[f] = {}
-        # values of stress at earthquake timings
-        stress_at_eq = cat[f]
-        # bin the values of stress at earthquake timings
-        if f"{f}_bins" in stress_bins:
-            bins = stress_bins[f"{f}_bins"]
-        else:
-            bins = np.linspace(tidal_stress[f].min(), tidal_stress[f].max(), nbins + 1)
-        (
-            seismicity_vs_stress[f]["hist"],
-            seismicity_vs_stress[f]["bins"],
-        ) = np.histogram(
-            stress_at_eq,
-            bins=bins,
-        )
-        # estimate the expected number of earthquakes in each bin for random seismicity
-        n_total = sum(seismicity_vs_stress[f]["hist"])
-        tidal_stress_hist, _ = np.histogram(
-            tidal_stress[f],
-            bins=seismicity_vs_stress[f]["bins"],
-        )
-        n_time_samples = np.sum(tidal_stress_hist)
-        # hist/n_times = fraction of time occupied by samples with stress values in given bin
-        # (hist/n_times)*ntotal = expected number of events with given stress value if
-        #                         seismicity were to be independent of tidal stress
-        if n_time_samples > 0:
-            seismicity_vs_stress[f]["expected_rate"] = (
-                tidal_stress_hist / n_time_samples
-            )
-        else:
-            seismicity_vs_stress[f]["expected_rate"] = np.zeros_like(tidal_stress_hist)
-        seismicity_vs_stress[f]["observed_rate"] = seismicity_vs_stress[f][
-            "hist"
-        ] / np.sum(seismicity_vs_stress[f]["hist"])
-        # anticipate 0/0
-        zero_by_zero = (seismicity_vs_stress[f]["observed_rate"] == 0.0) & (
-            seismicity_vs_stress[f]["expected_rate"] == 0.0
-        )
-        # estimate the tidal modulation ratio
-        relative_rate = np.ones(
-            len(seismicity_vs_stress[f]["observed_rate"]), dtype=np.float32
-        )
-        relative_rate[~zero_by_zero] = (
-            seismicity_vs_stress[f]["observed_rate"][~zero_by_zero]
-            / seismicity_vs_stress[f]["expected_rate"][~zero_by_zero]
-        )
-        # reset these to zero just in case one wants to analyze
-        # -----------------------------------------
-        #              method 1
-        # use special value to indicate no data
-        relative_rate[np.isnan(relative_rate) | np.isinf(relative_rate)] = -10.0
-        # normalization so that the ratio vector sums up to 1.
-        norm = np.mean(relative_rate[relative_rate != -10.0])
-        if norm != 0.0:
-            relative_rate[relative_rate != -10.0] /= norm
-        ## -----------------------------------------
-        ##              method 2
-        ## use special value to indicate no data
-        # relative_rate[np.isnan(relative_rate)] = 1.
-        # relative_rate[np.isinf(relative_rate)] = 1.
-        ## normalization so that the ratio vector sums up to 1.
-        # norm = np.mean(relative_rate)
-        # if norm != 0.0:
-        #    relative_rate /= norm
-        seismicity_vs_stress[f]["relative_rate"] = relative_rate
-
-    return seismicity_vs_stress
-
-
-def bin_eq_tidal_phases(
+def estimate_rate_forcing_bins(
     cat,
     forcing,
     forcing_bin_edges,
@@ -266,21 +135,17 @@ def bin_eq_tidal_phases(
     -----------
     cat : `pandas.DataFrame`
         Earthquake catalog.
-    tidal_stress : `pandas.DataFrame`
-        All tidal stress fields.
-    phase_bins : dict, optional
-        Dictionary providing the phase bins, e.g.
-        `phase_bins["instantaneous_phase_normal_bins"] = [-180, -170, ..., 170, 180]`
-        Defaults to '{}'.
-    fields : list of str, optional
-        List of instantaneous phase components to explore.
+    forcing : `pandas.Series`
+        Tidal forcing time series.
+    forcing_bin_edges : array-like
+        Edges of the forcing bins.
 
     Returns
     --------
     seismicity_vs_phase : dict
         For each phase component given in 'fields', a dictionary is given
         with the following attributes:
-        - "hist": Histogram of instantaneous phase values at earthquake times.
+        - "event_count": Histogram of instantaneous phase values at earthquake times.
         - "bins": Bins of the histogram.
         - "expected_rate": Fraction of the time axis covered by each phase
                            bin. For example, some phase values are
@@ -321,20 +186,21 @@ def bin_eq_tidal_phases(
     # estimate the tidal modulation ratio
     relative_rate = np.ones(len(observed_rate), dtype=np.float32)
     relative_rate[~zero_by_zero] = (
-        observed_rate[~zero_by_zero]
-        / expected_rate[~zero_by_zero]
+        observed_rate[~zero_by_zero] / expected_rate[~zero_by_zero]
     )
     relative_rate[invalid] = 1.0
     if np.any(np.isinf(relative_rate)):
         print("observed rate", observed_rate)
         print("expected rate", expected_rate)
-        print("hist", tidal_phase_hist)
+        print("event_count", count_vs_forcing)
         print("data", forcing)
     mean = np.mean(relative_rate)
     if clip_relative_rate_above is not None:
         if mean != 0.0:
             clip_relative_rate_above = clip_relative_rate_above / mean
-        relative_rate = np.clip(relative_rate, a_min=0.0, a_max=clip_relative_rate_above)
+        relative_rate = np.clip(
+            relative_rate, a_min=0.0, a_max=clip_relative_rate_above
+        )
     if clip_relative_rate_below is not None:
         if mean != 0.0:
             clip_relative_rate_below = clip_relative_rate_below / mean
@@ -348,11 +214,11 @@ def bin_eq_tidal_phases(
     relative_rate = relative_rate
 
     output = {
-            "event_count": count_vs_forcing,
-            "observed_rate": observed_rate,
-            "expected_rate": expected_rate,
-            "relative_rate": relative_rate,
-            }
+        "event_count": count_vs_forcing,
+        "observed_rate": observed_rate,
+        "expected_rate": expected_rate,
+        "relative_rate": relative_rate,
+    }
     return output
 
 
@@ -380,317 +246,7 @@ def _jackknife_bias(x, operator, x_all=None):
     return bias
 
 
-def composite_rate_vs_stress(
-    cat,
-    tidal_stress,
-    window_time,
-    forcing_name,
-    window_type="backward",
-    fortnightly_phase=None,
-    nbins=36,
-    short_window_days=3 * 30,
-    num_short_windows=8,
-    overlap=0.0,
-    stress_bins={},
-    downsample=0,
-    num_bootstrap_for_errors=100,
-    aggregate="median",
-    log=False,
-    min_num_events_in_short_window=10,
-    keep_short_windows=False,
-    progress=False,
-):
-    """Compute the composite (mean or median) rate ratio vs tidal stress.
-
-    Parameters
-    -----------
-    cat : `pandas.DataFrame`
-        The catalog to analyze
-    tidal_stress : `pandas.DataFrame`
-        All tidal stress fields.
-    nbins : int, optional
-        Number of default stress bins if `stress_bins` is not provided.
-        Defaults to 6.
-    stress_bins : dict, optional
-        Dictionary providing the stress bins, e.g.
-        `stress_bins["shear_stress_bins"] = [-1000, -800, ..., 800, 1000]`
-        Defaults to '{}'.
-    fields : list of str, optional
-        See `bin_eq_tidal_stresses`.
-    overlap : float, optional
-        Overlap between sliding short time windows.
-    num_short_windows : scalar integer, default to 8
-        Number of sliding short windows over which the statistics is computed.
-        The length of the corresponding large window is
-        `num_short_windows*(1 - overlap)*short_window_days + overlap*short_window_days`.
-        The sliding windows start from `t_end`.
-    t_end : string or datetime-like object, default to None
-        Reference time from which the short time windows are sliding backward.
-        If None, take the latest earthquake timing in `cat`.
-    progress : boolean, default to True
-        If True, print the progress bar when iterating over the short time windows.
-    downsample : int, optional
-        If different from 0, the composite rate ratio is downsampled by applying
-        average pooling in bins of `downsample` samples. Users may use many bins
-        at first to accurately estimate the expected ratio and then downsample
-        the observed/expectred ratio to reduce noise. Defaults to 0.
-    num_bootstrap_for_errors : int, optional
-        The error on the composite rate ratio is computed by estimating the
-        composite rate ratio `num_bootstrap_for_errors` times on randomly
-        selected short windows.
-    """
-    from dateutil.relativedelta import relativedelta
-
-    # check validity of arguments
-    assert window_type in {
-        "backward",
-        "forward",
-    }, "window_type should be either of 'backward' or 'forward'"
-    assert aggregate in {
-        "mean",
-        "median",
-        "weighted_mean",
-        "svd",
-    }, "aggregate should be either of 'mean', 'median' or 'svd'"
-
-    if aggregate == "median":
-        # operator = partial(np.ma.median, axis=-1)
-        operator = partial(np.median, axis=-1)
-        pulling_operator = np.median
-    elif aggregate == "mean":
-        # operator = partial(np.ma.mean, axis=-1)
-        operator = partial(np.mean, axis=-1)
-        pulling_operator = np.mean
-    elif aggregate == "svd":
-        operator = get_singular_vector
-        pulling_operator = np.mean
-
-    short_window_dur = relativedelta(days=short_window_days)
-    short_window_shift = relativedelta(days=int((1.0 - overlap) * short_window_days))
-    seismicity_vs_forcing_short_win = []
-
-    if window_type == "backward":
-        t_end = window_time
-        t_start = t_end - short_window_dur
-    elif window_type == "forward":
-        t_start = window_time
-        t_end = t_start + short_window_dur
-
-    # ----------------------------------------------
-    #   Estimate the observed and expected rate
-    #   of seismicity as a function of 'forcing_name'
-    #   in the `num_short_windows` windows.
-    # ----------------------------------------------
-    disable = False if progress else True
-    for n in tqdm(
-        range(num_short_windows), desc="Computing in sub-windows", disable=disable
-    ):
-        # t_start = t_end - short_window_dur
-        seismicity_vs_forcing_short_win.append(
-            bin_eq_tidal_stresses(
-                cat[(cat["origin_time"] > t_start) & (cat["origin_time"] <= t_end)],
-                tidal_stress[
-                    (tidal_stress.index > t_start) & (tidal_stress.index <= t_end)
-                ],
-                nbins=nbins,
-                stress_bins=stress_bins,
-                fields=[forcing_name],
-            )
-        )
-
-        if window_type == "backward":
-            t_end -= short_window_shift
-            t_start -= short_window_shift
-        elif window_type == "forward":
-            t_end += short_window_shift
-            t_start += short_window_shift
-
-    # ----------------------------------------------
-    #            aggregate results
-    # ----------------------------------------------
-    seismicity_vs_forcing = {}
-    for field1 in seismicity_vs_forcing_short_win[0]:
-        # outer loop: if several forcing types
-        seismicity_vs_forcing[field1] = {}
-        num_events = [
-            seismicity_vs_forcing_short_win[i][field1]["hist"].sum()
-            for i in range(num_short_windows)
-        ]
-        # define weights proportionally to expected_rate, because expected_rate
-        # is itself proportional to the time interval covered by the forcing bin
-        weights = np.stack(
-            [
-                seismicity_vs_forcing_short_win[i][field1]["expected_rate"]
-                for i in range(num_short_windows)
-                if num_events[i] >= min_num_events_in_short_window
-            ],
-            axis=-1,
-        )
-        weights /= np.sum(weights, axis=-1, keepdims=True)
-        if aggregate == "weighted_mean":
-            operator = partial(_weighted_mean, weights=weights)
-            pulling_operator = partial(np.mean, axis=-1)
-
-        for field2 in seismicity_vs_forcing_short_win[0][field1]:
-            # inner loop: all the short-window quantities are aggregated
-            #             into a single long-window estimate
-            if field2 == "bins":
-                continue
-            all_windows = np.stack(
-                [
-                    seismicity_vs_forcing_short_win[i][field1][field2]
-                    for i in range(num_short_windows)
-                    if num_events[i] >= min_num_events_in_short_window
-                ],
-                axis=-1,
-            )
-            if all_windows.shape[-1] == 0:
-                print(
-                    "Could not find any short windows with more events"
-                    f"than min_num_events_in_short_window "
-                    f"(={min_num_events_in_short_window})"
-                )
-            if keep_short_windows:
-                seismicity_vs_forcing[field1][f"all_windows_{field2}"] = all_windows
-
-            ## ---------------------------------------------------------
-            ##                  downsample before aggregating
-            # if (downsample > 0) and field2 in [
-            #    "observed_rate",
-            #    "relative_rate",
-            #    "hist",
-            #    "expected_rate",
-            # ]:
-            #    print(field2)
-            #    # `expected_rate` and, consequently, `relative_rate` must be
-            #    # estimated in narrow bins. However, the number of bins can
-            #    # afterward be reduced by downsampling (average pooling).
-            #    length = all_windows.shape[0]
-            #    num_windows = all_windows.shape[1]
-
-            #    assert downsample * (length // downsample) == length
-
-            #    downsampled_windows = np.zeros(
-            #            (length //downsample, num_windows), dtype=all_windows.dtype
-            #            )
-            #    for i in range(all_windows.shape[1]):
-            #        downsampled_windows[:, i] = pulling_operator(
-            #                all_windows[:, i].reshape(-1, downsample),
-            #            axis=-1,
-            #        )
-            #    all_windows = downsampled_windows
-
-            # ---------------------------------------------------------
-            #    aggregate short-window observations into one estimate
-            if field2 == "expected_rate":
-                seismicity_vs_forcing[field1][field2] = np.sum(
-                    all_windows, axis=-1
-                ).astype("float32")
-                # by construction, this is a pdf so its integral must be 1
-                seismicity_vs_forcing[field1][field2] /= np.float32(
-                    np.sum(seismicity_vs_forcing[field1][field2])
-                )
-            elif field2 in ["hist", "observed_rate", "relative_rate"]:
-                if field2 == "relative_rate":
-                    # all_windows = np.ma.masked_array(
-                    #    data=all_windows, mask=all_windows == -10.0
-                    # )
-                    index_pool = np.arange(all_windows.shape[0])
-                    for i in range(all_windows.shape[-1]):
-                        valid = all_windows[:, i] != -10.0
-                        all_windows[:, i] = np.interp(
-                            index_pool, index_pool[valid], all_windows[valid, i]
-                        )
-                    if log:
-                        all_windows = np.log(all_windows)
-                if aggregate == "svd":
-                    (
-                        seismicity_vs_forcing[field1][f"{field2}"],
-                        seismicity_vs_forcing[field1][f"{field2}_err"],
-                    ) = bootstrap_statistic(
-                        all_windows, operator, n_bootstraps=num_bootstrap_for_errors
-                    )
-
-                    # first_singular_vector = get_singular_vector(
-                    #    all_windows.T, singular_value_index=0
-                    # )
-                    # seismicity_vs_forcing[field1][f"{field2}"] = first_singular_vector
-                else:
-                    (
-                        seismicity_vs_forcing[field1][field2],
-                        seismicity_vs_forcing[field1][f"{field2}_err"],
-                    ) = bootstrap_statistic(
-                        all_windows, operator, n_bootstraps=num_bootstrap_for_errors
-                    )
-                # bias = _jackknife_bias(
-                #        all_windows, operator, x_all=seismicity_vs_forcing[field1][field2]
-                #        )
-                if log and field2 == "relative_rate":
-                    seismicity_vs_forcing[field1][field2] = np.exp(
-                        seismicity_vs_forcing[field1][field2]
-                    )
-
-            # ---------------------------------------------------------
-            #                  downsample after agrgegating
-            if (downsample > 0) and field2 in [
-                "observed_rate",
-                "relative_rate",
-                "hist",
-                "expected_rate",
-            ]:
-                length = len(seismicity_vs_forcing[field1][f"{field2}"])
-                assert downsample * (length // downsample) == length
-
-                # if aggregate == "svd":
-                #    pulling_operator = np.mean
-                # else:
-                #    pulling_operator = operator
-
-                seismicity_vs_forcing[field1][f"{field2}"] = pulling_operator(
-                    seismicity_vs_forcing[field1][f"{field2}"].reshape(-1, downsample),
-                    axis=-1,
-                )
-                if f"{field2}_err" in seismicity_vs_forcing[field1]:
-                    seismicity_vs_forcing[field1][f"{field2}_err"] = pulling_operator(
-                        seismicity_vs_forcing[field1][f"{field2}_err"].reshape(
-                            -1, downsample
-                        ),
-                        axis=-1,
-                    )
-        seismicity_vs_forcing[field1]["bins"] = seismicity_vs_forcing_short_win[0][
-            field1
-        ]["bins"]
-        if downsample > 0:
-            seismicity_vs_forcing[field1]["bins"] = seismicity_vs_forcing[field1][
-                "bins"
-            ][::downsample]
-
-        # =========================
-        #       normalize
-        # =========================
-        # --------- relative_rate
-        bins_ = seismicity_vs_forcing[field1]["bins"]
-        midbins = (bins_ + bins_) / 2.0
-        # theoretically, the rate ratio at stress=0 must be 1
-        ref_bin_idx = np.abs(midbins).argmin()
-        ref_relative_rate = seismicity_vs_forcing[field1]["relative_rate"][ref_bin_idx]
-        # ref_relative_rate =  seismicity_vs_forcing[field1]["relative_rate"][
-        #        np.array([ref_bin_idx-1, ref_bin_idx, ref_bin_idx+1])
-        #        ].mean()
-        seismicity_vs_forcing[field1]["relative_rate"] /= ref_relative_rate
-        # seismicity_vs_forcing[field1][f"{field2}"] /= np.ma.mean(
-        #    seismicity_vs_forcing[field1][f"{field2}"]
-        # )
-        # --------- observed and expected rate
-        for field2 in ["observed_rate", "expected_rate"]:
-            seismicity_vs_forcing[field1][field2] /= np.ma.sum(
-                seismicity_vs_forcing[field1][field2]
-            )
-
-    return seismicity_vs_forcing
-
-
-def composite_relative_rate_vs_phase(
+def composite_rate_estimate(
     cat,
     forcing,
     forcing_bin_edges,
@@ -716,11 +272,10 @@ def composite_relative_rate_vs_phase(
     -----------
     cat : `pandas.DataFrame`
         The catalog to analyze
-    tidal_stress : `pandas.DataFrame`
-        All tidal stress fields.
-    nbins : int, optional
-        Number of default instantaneous phase bins if `phase_bins`
-        is not provided. Defaults to 9.
+    forcing : `pandas.Series`
+        Tidal forcing time series.
+    forcing_bin_edges : array-like
+        Edges of the forcing bins,
     short_window_days : iont, default to 90
         Size of the short time window, in days.
     overlap : float, default to 0.
@@ -794,11 +349,9 @@ def composite_relative_rate_vs_phase(
     ):
         # t_start = t_end - short_window_dur
         seismicity_vs_forcing_short_win.append(
-            bin_eq_tidal_phases(
+            estimate_rate_forcing_bins(
                 cat[(cat["origin_time"] > t_start) & (cat["origin_time"] <= t_end)],
-                forcing[
-                    (forcing.index > t_start) & (forcing.index <= t_end)
-                ],
+                forcing[(forcing.index > t_start) & (forcing.index <= t_end)],
                 forcing_bin_edges,
                 clip_relative_rate_above=clip_relative_rate_above,
                 clip_relative_rate_below=clip_relative_rate_below,
@@ -897,13 +450,9 @@ def composite_relative_rate_vs_phase(
                 _padded, mysize=wiener_filter, noise=noise_power
             )  # [half_wiener_win:-half_wiener_win, :]
             if half_wiener_win[0] > 0:
-                all_windows = all_windows[
-                    half_wiener_win[0] : -half_wiener_win[0], :
-                ]
+                all_windows = all_windows[half_wiener_win[0] : -half_wiener_win[0], :]
             if half_wiener_win[1] > 0:
-                all_windows = all_windows[
-                    :, half_wiener_win[1] : -half_wiener_win[1]
-                ]
+                all_windows = all_windows[:, half_wiener_win[1] : -half_wiener_win[1]]
 
         if np.sum(np.isnan(all_windows)) > 0:
             breakpoint()
@@ -913,12 +462,7 @@ def composite_relative_rate_vs_phase(
 
         # ---------------------------------------------------------
         #                  downsample
-        if (downsample > 0) and field in [
-            "observed_rate",
-            "relative_rate",
-            "event_count",
-            "expected_rate",
-        ]:
+        if downsample > 0:
             # `expected_rate` and, consequently, `relative_rate` must be
             # estimated in narrow bins. However, the number of bins can
             # afterward be reduced by downsampling (average pooling).
@@ -935,31 +479,23 @@ def composite_relative_rate_vs_phase(
                     all_windows[:, i].reshape(-1, downsample),
                     axis=-1,
                 )
-                # if f"{field2}_err" in seismicity_vs_forcing[field1]:
-                #    seismicity_vs_forcing[field1][f"{field2}_err"] = pulling_operator(
-                #        seismicity_vs_forcing[field1][f"{field2}_err"].reshape(
-                #            -1, downsample
-                #        ),
-                #        axis=-1,
-                #    )
             all_windows = downsampled_windows
 
         # ---------------------------------------------------------
         #    aggregate short-window observations into one estimate
-        if field == "expected_rate":
-            seismicity_vs_forcing[field] = np.sum(
+        if field in {"expected_rate", "bin_duration"}:
+            seismicity_vs_forcing[field] = np.sum(all_windows, axis=-1).astype(
+                "float32"
+            )
+            if field == "expected_rate":
+                # by construction, this is a pdf so its integral must be 1
+                seismicity_vs_forcing[field] /= np.float32(
+                    np.sum(seismicity_vs_forcing[field])
+                )
+            seismicity_vs_forcing[f"{field}_err"] = np.mean(
                 all_windows, axis=-1
             ).astype("float32")
-            # by construction, this is a pdf so its integral must be 1
-            seismicity_vs_forcing[field] /= np.float32(
-                np.sum(seismicity_vs_forcing[field])
-            )
-        if field in [
-            "observed_rate",
-            "relative_rate",
-            "event_count",
-        ]:
-
+        else:
             (
                 seismicity_vs_forcing[field],
                 seismicity_vs_forcing[f"{field}_err"],
@@ -972,64 +508,19 @@ def composite_relative_rate_vs_phase(
             #            )
             #    #print(bias)
             #    seismicity_vs_forcing[field1][field2] -= bias
+
+        # =========================
+        #       normalize
+        # =========================
+        if field == "relative_rate":
+            seismicity_vs_forcing[field] /= np.ma.mean(seismicity_vs_forcing[field])
+        elif field in {"observed_rate", "expected_rate"}:
+            seismicity_vs_forcing[field] /= np.sum(seismicity_vs_forcing[field])
         # ---------------------------------------------------------
-
-        ## ---------------------------------------------------------
-        ##                  downsample
-        # if (downsample > 0) and field2 in [
-        #    "observed_rate",
-        #    "relative_rate",
-        #    "hist",
-        #    "expected_rate",
-        # ]:
-        #    # `expected_rate` and, consequently, `relative_rate` must be
-        #    # estimated in narrow bins. However, the number of bins can
-        #    # afterward be reduced by downsampling (average pooling).
-        #    length = len(seismicity_vs_forcing[field1][f"{field2}"])
-
-        #    assert downsample * (length // downsample) == length
-
-        #    seismicity_vs_forcing[field1][f"{field2}"] = pulling_operator(
-        #        seismicity_vs_forcing[field1][f"{field2}"].reshape(-1, downsample),
-        #        axis=-1,
-        #    )
-        #    if f"{field2}_err" in seismicity_vs_forcing[field1]:
-        #        seismicity_vs_forcing[field1][f"{field2}_err"] = pulling_operator(
-        #            seismicity_vs_forcing[field1][f"{field2}_err"].reshape(
-        #                -1, downsample
-        #            ),
-        #            axis=-1,
-        #        )
-
-        # if field2 in ["relative_rate"]:
-        #    # normalize by mean so that tide-independent seismicity
-        #    # shows with `relative_rate` = 1
-        #    seismicity_vs_forcing[field1][f"{field2}"] /= np.mean(
-        #        seismicity_vs_forcing[field1][f"{field2}"]
-        #    )
-        # elif field2 in ["observed_rate", "expected_rate"]:
-        #    # normalize by sum because they are pdfs
-        #    seismicity_vs_forcing[field1][f"{field2}"] /= np.sum(
-        #        seismicity_vs_forcing[field1][f"{field2}"]
-        #    )
     seismicity_vs_forcing["bins"] = forcing_bin_edges
     if downsample > 0:
         # downsample bins if necessary
-        seismicity_vs_forcing["bins"] = seismicity_vs_forcing[
-            "bins"
-        ][::downsample]
-    # =========================
-    #       normalize
-    # =========================
-    # --------- relative_rate
-    seismicity_vs_forcing["relative_rate"] /= np.ma.mean(
-        seismicity_vs_forcing["relative_rate"]
-    )
-    # --------- observed and expected rate
-    for field in ["observed_rate", "expected_rate"]:
-        seismicity_vs_forcing[field] /= np.sum(
-            seismicity_vs_forcing[field]
-        )
+        seismicity_vs_forcing["bins"] = seismicity_vs_forcing["bins"][::downsample]
     if len(seismicity_vs_forcing) == 0:
         return None
     else:
