@@ -348,7 +348,7 @@ def fit_relative_rate_vs_stress_rate_state_bootstrap(x, y, y_err, num_bootstraps
 
     bounds = (1.0, 1.e7)
     W = np.ones(len(y_err), dtype=y_err.dtype)
-    W[y_err != 0.] = 1. / y_err
+    W[y_err != 0.] = 1. / y_err[y_err != 0.]
     W /= W.sum()
     inverted_Asig_Pa = np.zeros(num_bootstraps, dtype=np.float32)
     for n in range(num_bootstraps):

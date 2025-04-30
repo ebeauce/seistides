@@ -4,6 +4,7 @@ import pickle
 import warnings
 
 from abc import ABC, abstractmethod
+from functools import partial
 from . import utils
 
 
@@ -170,8 +171,13 @@ class Modulationmeter(ABC):
         return time, performance_metrics
 
     def fit_modulation(
-        self, func, window_time, forcing_name, model_name="model1",
-        quantity="relative_rate", **kwargs
+        self,
+        func,
+        window_time,
+        forcing_name,
+        model_name="model1",
+        quantity="relative_rate",
+        **kwargs,
     ):
         """ """
         if forcing_name not in self.model:
@@ -186,9 +192,8 @@ class Modulationmeter(ABC):
         )
 
     def evaluate_aic(
-            self, window_time, forcing_name,
-            quantity="relative_rate", model_name="model1"
-            ):
+        self, window_time, forcing_name, quantity="relative_rate", model_name="model1"
+    ):
         """ """
         if (
             forcing_name not in self.model
@@ -230,6 +235,9 @@ class Modulationmeter(ABC):
     def set_forcing(self, forcing):
         self.forcing = forcing
 
+    def set_forcing_bins(self, forcing_bins):
+        self.forcing_bins = forcing_bins
+
     def write(self, path):
         with open(path, "wb") as fout:
             pickle.dump(self, fout)
@@ -255,6 +263,8 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
         forcing=None,
         window_duration_days=None,
         window_type="backward",
+        short_window_days=None,
+        num_short_windows=None,
     ):
         super().__init__(
             catalog=catalog,
@@ -268,9 +278,6 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
     @property
     def window_duration_sec(self):
         return self.window_duration_days * 24.0 * 3600.0
-
-    def set_forcing_bins(self, forcing_bins):
-        self.forcing_bins = forcing_bins
 
     def build_forcingtime_bins(self):
         self.forcingtime_bins = {}
@@ -286,7 +293,12 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                     "the duration of each phase-time bin."
                 )
             forcing_leftbin_membership = np.digitize(
-                self.forcing[forcing_name], self.forcing_bins[forcing_name]
+                np.clip(
+                    self.forcing[forcing_name],
+                    a_min=self.forcing_bins[forcing_name].min(),
+                    a_max=self.forcing_bins[forcing_name].max()
+                    ),
+                self.forcing_bins[forcing_name]
             )
             # arbitrary choice: when value is exactly at the bin edge,
             # we assign it to the previous bin
@@ -330,7 +342,9 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 self.forcingtime_bins[forcing_name]["forcingtime_bin_time_edges_sec"],
             )
             if attach_membership_to_cat:
-                self.catalog[f"membership_{forcing_name}"] = forcingtime_bin_eq_membership
+                self.catalog[f"membership_{forcing_name}"] = (
+                    forcingtime_bin_eq_membership
+                )
             forcingtime_bin_values, forcingtime_bin_counts = np.unique(
                 forcingtime_bin_eq_membership, return_counts=True
             )
@@ -338,15 +352,17 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 forcingtime_bin_values, "forcingtime_bin_count"
             ] = forcingtime_bin_counts
             self.forcingtime_bins[forcing_name].fillna(
-                    {"forcingtime_bin_count": 0}, inplace=True
-                    )
+                {"forcingtime_bin_count": 0}, inplace=True
+            )
 
             # first row is just here to indicate beginning of first forcingtime bin,
             # but because each row gives stats for bin to the left,
             # the first row has no stat by construction
             self.forcingtime_bins[forcing_name].loc[0, "forcingtime_bin_count"] = pd.NA
 
-    def measure_modulation(self, func, window_time, forcing_name, **kwargs):
+    def measure_modulation(
+        self, window_time, forcing_name, rate_estimate_kwargs={}, **kwargs
+    ):
         """ """
         from dateutil.relativedelta import relativedelta
 
@@ -392,12 +408,12 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 <= t_end.timestamp()
             )
         ]
-        modulation = func(
+
+        modulation = utils.estimate_rate_forcingtime_bins(
             subcat,
             subforcingtime_bins,
             self.forcing_bins[forcing_name],
-            num_bootstraps=kwargs.get("num_bootstraps", 100),
-            num_std_cutoff=kwargs.get("num_std_cutoff", 0.)
+            **rate_estimate_kwargs,
         )
 
         if modulation is None:
@@ -461,7 +477,9 @@ class ModulationmeterMultiWindows(Modulationmeter):
         """
         return
 
-    def measure_modulation(self, func, window_time, forcing_name, **kwargs):
+    def measure_modulation(
+        self, window_time, forcing_name, rate_estimate_kwargs={}, **kwargs
+    ):
         """ """
         if self.catalog is None:
             warnings.warn(
@@ -474,11 +492,14 @@ class ModulationmeterMultiWindows(Modulationmeter):
             )
             return
 
-        modulation = func(
+        func = partial(utils.estimate_rate_forcing_bins, **rate_estimate_kwargs)
+
+        modulation = utils.composite_rate_estimate(
             self.catalog,
             self.forcing[forcing_name],
             self.forcing_bins[forcing_name],
             window_time,
+            func,
             short_window_days=self.short_window_days,
             num_short_windows=self.num_short_windows,
             overlap=self.overlap,
@@ -498,3 +519,72 @@ class ModulationmeterMultiWindows(Modulationmeter):
             self.modulation[forcing_name][window_time]["bins"]
         )
 
+
+class ModulationmeterMultiWindowForcingTimeBins(
+    ModulationmeterForcingTimeBins, ModulationmeterMultiWindows
+):
+
+    def __init__(
+        self,
+        short_window_days=None,
+        num_short_windows=None,
+        overlap=None,
+        downsample=None,
+        catalog=None,
+        forcing=None,
+        forcing_bins=None,
+        window_type="backward",
+    ):
+        super().__init__(
+            catalog=catalog,
+            forcing=forcing,
+            downsample=downsample,
+            window_type=window_type,
+            forcing_bins=forcing_bins,
+        )
+        self.short_window_days = short_window_days
+        self.num_short_windows = num_short_windows
+        self.overlap = overlap
+
+    def measure_modulation(
+        self, window_time, forcing_name, rate_estimate_kwargs={}, **kwargs
+    ):
+        """ """
+        if self.catalog is None:
+            warnings.warn(
+                "You need to define the `catalog` attribute. See `set_catalog`."
+            )
+            return
+        if self.forcing is None:
+            warnings.warn(
+                "You need to define the `forcing` attribute. See `set_forcing`."
+            )
+            return
+
+        func = partial(utils.estimate_rate_forcingtime_bins, **rate_estimate_kwargs)
+
+        modulation = utils.composite_rate_estimate(
+            self.catalog,
+            self.forcingtime_bins[forcing_name],
+            self.forcing_bins[forcing_name],
+            window_time,
+            func,
+            mode="forcingtime",
+            short_window_days=self.short_window_days,
+            num_short_windows=self.num_short_windows,
+            overlap=self.overlap,
+            downsample=self.downsample,
+            **kwargs,
+        )
+
+        if modulation is None:
+            print("Could not estimate seismicity vs forcing!")
+            print("(probably because of too few events in the catalog)")
+            return
+
+        if forcing_name not in self.modulation:
+            self.modulation[forcing_name] = {}
+        self.modulation[forcing_name][window_time] = modulation
+        self.modulation[forcing_name][window_time]["midbins"] = self._midbins(
+            self.modulation[forcing_name][window_time]["bins"]
+        )

@@ -59,7 +59,8 @@ def estimate_rate_forcingtime_bins(
                 + 1
             )
         selected_forcingtime_bin_indexes = np.where(
-            (forcingtime_bins["forcing_leftbin_membership"] == bin_edge_idx)
+            #(forcingtime_bins["forcing_leftbin_membership"] == bin_edge_idx)
+            np.isin(forcingtime_bins["forcing_leftbin_membership"], bin_edge_indexes)
         )[0]
         # if num_std_cutoff > 0.0:
         #    mean_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
