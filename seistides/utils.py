@@ -20,6 +20,8 @@ def estimate_rate_forcingtime_bins(
     forcing_bin_edges,
     num_bootstraps=100,
     num_std_cutoff=0.0,
+    bin_extension=0,
+    cyclic_bins=False,
 ):
     num_bins = len(forcing_bin_edges) - 1
 
@@ -45,9 +47,19 @@ def estimate_rate_forcingtime_bins(
 
     for i in range(num_bins):
         bin_edge_idx = i + 1
+        if cyclic_bins:
+            bin_edge_indexes = (
+                np.arange(i - bin_extension, i + bin_extension + 1) % num_bins
+            ) + 1
+        else:
+            bin_edge_indexes = (
+                np.arange(
+                    max(0, i - bin_extension), min(num_bins, i + bin_extension + 1)
+                )
+                + 1
+            )
         selected_forcingtime_bin_indexes = np.where(
             (forcingtime_bins["forcing_leftbin_membership"] == bin_edge_idx)
-            # & ~anomalous
         )[0]
         # if num_std_cutoff > 0.0:
         #    mean_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
@@ -65,41 +77,49 @@ def estimate_rate_forcingtime_bins(
         #    selected_forcingtime_bin_indexes = selected_forcingtime_bin_indexes[
         #        ~anomalous
         #    ]
-        rates = np.zeros(num_bootstraps)
-        counts = np.zeros(num_bootstraps)
-        durations = np.zeros(num_bootstraps)
-        for j in range(num_bootstraps):
-            indexes_b = np.random.choice(
-                selected_forcingtime_bin_indexes,
-                len(selected_forcingtime_bin_indexes),
-                replace=True,
-            )
-            # indexes_b = np.random.choice(
-            #        selected_forcingtime_bin_indexes,
-            #        len(selected_forcingtime_bin_indexes) // 2,
-            #        replace=False
-            #        )
+        if num_bootstraps > 0:
+            rates = np.zeros(num_bootstraps)
+            counts = np.zeros(num_bootstraps)
+            durations = np.zeros(num_bootstraps)
+            for j in range(num_bootstraps):
+                indexes_b = np.random.choice(
+                    selected_forcingtime_bin_indexes,
+                    len(selected_forcingtime_bin_indexes),
+                    replace=True,
+                )
+                counts[j] = forcingtime_bins.iloc[indexes_b][
+                    "forcingtime_bin_count"
+                ].sum()
+                durations[j] = forcingtime_bins.iloc[indexes_b][
+                    "forcingtime_bin_duration_sec"
+                ].sum()
+                rates[j] = counts[j] / durations[j]
+            # variance_stabilized_r = np.sqrt(rates)
+            # robust_mean_estimate = np.median(
+            #    variance_stabilized_r[variance_stabilized_r > 0.0]
+            # )
+            # robust_mean_rate = robust_mean_estimate**2
+            # rate_vs_forcing[i] = robust_mean_rate
+            rate_vs_forcing[i] = np.mean(rates)
+            if np.isnan(rate_vs_forcing[i]):
+                print("!!!!!!!!!!!!!!! NAN !!!!!!!!!!!!!!!")
+                print(rates)
+                print("!!!!!!!!!!!!!!! NAN !!!!!!!!!!!!!!!")
 
-            rates[j] = (
-                forcingtime_bins.iloc[indexes_b]["forcingtime_bin_count"].sum()
-                / forcingtime_bins.iloc[indexes_b]["forcingtime_bin_duration_sec"].sum()
-            )
-            counts[j] = forcingtime_bins.iloc[indexes_b]["forcingtime_bin_count"].sum()
-            durations[j] = forcingtime_bins.iloc[indexes_b][
+            rate_vs_forcing_std[i] = np.std(rates)
+            count_vs_forcing[i] = np.median(counts)
+            count_vs_forcing_std[i] = np.std(counts)
+            duration_vs_forcing[i] = np.median(durations)
+            duration_vs_forcing_std[i] = np.std(durations)
+        else:
+            sel_forcingtime_bins = forcingtime_bins.iloc[
+                selected_forcingtime_bin_indexes
+            ]
+            count_vs_forcing[i] = sel_forcingtime_bins["forcingtime_bin_count"].sum()
+            duration_vs_forcing[i] = sel_forcingtime_bins[
                 "forcingtime_bin_duration_sec"
             ].sum()
-        variance_stabilized_r = np.sqrt(rates)
-        robust_mean_estimate = np.median(
-            variance_stabilized_r[variance_stabilized_r > 0.0]
-        )
-        robust_mean_rate = robust_mean_estimate**2
-        rate_vs_forcing[i] = robust_mean_rate
-        # rate_vs_forcing[i] = np.mean(rates)
-        rate_vs_forcing_std[i] = np.std(rates)
-        count_vs_forcing[i] = np.median(counts)
-        count_vs_forcing_std[i] = np.std(counts)
-        duration_vs_forcing[i] = np.median(durations)
-        duration_vs_forcing_std[i] = np.std(durations)
+            rate_vs_forcing[i] = count_vs_forcing[i] / duration_vs_forcing[i]
 
     average_rate = (
         forcingtime_bins["forcingtime_bin_count"].sum()
@@ -217,10 +237,10 @@ def estimate_rate_forcing_bins(
         )
 
     ## normalization so that the ratio vector sums up to 1.
-    #norm = np.mean(relative_rate)
-    #if norm != 0.0:
+    # norm = np.mean(relative_rate)
+    # if norm != 0.0:
     #    relative_rate /= norm
-    #relative_rate = relative_rate
+    # relative_rate = relative_rate
 
     output = {
         "relative_rate": relative_rate,
@@ -260,6 +280,8 @@ def composite_rate_estimate(
     forcing,
     forcing_bin_edges,
     window_time,
+    func,
+    mode="forcing",
     window_type="backward",
     short_window_days=3 * 30,
     num_short_windows=8,
@@ -271,8 +293,6 @@ def composite_rate_estimate(
     min_num_events_in_short_window=10,
     min_fraction_of_valid_windows=0.50,
     keep_short_windows=False,
-    clip_relative_rate_above=None,
-    clip_relative_rate_below=None,
     progress=False,
 ):
     """Count number of earthquakes in phase bins with bootstrapping analysis.
@@ -356,16 +376,22 @@ def composite_rate_estimate(
     for n in tqdm(
         range(num_short_windows), desc="Computing in sub-windows", disable=disable
     ):
-        # t_start = t_end - short_window_dur
+        subcat = cat[(cat["origin_time"] > t_start) & (cat["origin_time"] <= t_end)]
+        if mode == "forcing":
+            subforcing = forcing[(forcing.index > t_start) & (forcing.index <= t_end)]
+        elif mode == "forcingtime":
+            subforcing = forcing[
+                (forcing["forcingtime_bin_time_edges_sec"] > t_start.timestamp())
+                & (forcing["forcingtime_bin_time_edges_sec"] <= t_end.timestamp())
+            ]
         seismicity_vs_forcing_short_win.append(
-            estimate_rate_forcing_bins(
-                cat[(cat["origin_time"] > t_start) & (cat["origin_time"] <= t_end)],
-                forcing[(forcing.index > t_start) & (forcing.index <= t_end)],
+            func(
+                subcat,
+                subforcing,
                 forcing_bin_edges,
-                clip_relative_rate_above=clip_relative_rate_above,
-                clip_relative_rate_below=clip_relative_rate_below,
             )
         )
+
         if window_type == "backward":
             t_end -= short_window_shift
             t_start -= short_window_shift
@@ -410,9 +436,11 @@ def composite_rate_estimate(
         pulling_operator = partial(np.mean, axis=-1)
 
     for field in seismicity_vs_forcing_short_win[0]:
-        # inner loop: all the short-window quantities are aggregated
-        #             into a single long-window estimate
+        # all the short-window quantities are aggregated
+        # into a single long-window estimate
         if field == "bins":
+            continue
+        if field[-len("_err") :] == "_err":
             continue
         all_windows = np.stack(
             [
@@ -518,10 +546,10 @@ def composite_rate_estimate(
         #   (if aggregate='svd' was used, the units are meaningless
         if field in {"relative_rate", "observed_rate"}:
             seismicity_vs_forcing[f"{field}_err"] /= np.ma.mean(
-                    seismicity_vs_forcing[field]
-                    )
+                seismicity_vs_forcing[field]
+            )
             seismicity_vs_forcing[field] /= np.ma.mean(seismicity_vs_forcing[field])
-        #elif field in {"observed_rate"}:
+        # elif field in {"observed_rate"}:
         #    seismicity_vs_forcing[field] /= np.sum(seismicity_vs_forcing[field])
         # ---------------------------------------------------------
     seismicity_vs_forcing["bins"] = forcing_bin_edges
