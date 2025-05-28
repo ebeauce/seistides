@@ -170,6 +170,43 @@ class Modulationmeter(ABC):
             performance_metrics["rms_residual"].append(_mod["rms_residual"])
         return time, performance_metrics
 
+    def get_obs_vs_forcing_vs_time(self, forcing_name, obs_name):
+        """
+        """
+        time_periods = list(
+                self.modulation[forcing_name].keys()
+                )
+        time_periods.sort()
+
+        obs = np.stack(
+                [
+                    self.modulation[forcing_name][tp][obs_name]
+                    for tp in time_periods
+                 ],
+                axis=0
+                )
+
+        return obs, pd.to_datetime(time_periods)
+
+    def get_model_vs_forcing_vs_time(self, forcing_name, obs_name):
+        """
+        """
+        time_periods = list(
+                self.model[forcing_name].keys()
+                )
+        time_periods.sort()
+
+        model = np.stack(
+                [
+                    self.model[forcing_name][tp][obs_name]
+                    for tp in time_periods
+                 ],
+                axis=0
+                )
+
+        return model, pd.to_datetime(time_periods)
+
+
     def fit_modulation(
         self,
         func,
@@ -296,9 +333,9 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 np.clip(
                     self.forcing[forcing_name],
                     a_min=self.forcing_bins[forcing_name].min(),
-                    a_max=self.forcing_bins[forcing_name].max()
-                    ),
-                self.forcing_bins[forcing_name]
+                    a_max=self.forcing_bins[forcing_name].max(),
+                ),
+                self.forcing_bins[forcing_name],
             )
             # arbitrary choice: when value is exactly at the bin edge,
             # we assign it to the previous bin
@@ -337,6 +374,17 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
 
     def count_events_in_forcingtime_bins(self, attach_membership_to_cat=False):
         for forcing_name in self.forcing_bins:
+            if (
+                self.catalog["t_eq_s"].values.max()
+                > self.forcingtime_bins[forcing_name][
+                    "forcingtime_bin_time_edges_sec"
+                ].max()
+            ):
+                warnings.warn(
+                    "Forcing time series stop before end of catalog! "
+                    "Aborting `count_events_in_forcingtime_bins`."
+                )
+                continue
             forcingtime_bin_eq_membership = np.digitize(
                 self.catalog["t_eq_s"].values,
                 self.forcingtime_bins[forcing_name]["forcingtime_bin_time_edges_sec"],
@@ -360,6 +408,54 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
             # the first row has no stat by construction
             self.forcingtime_bins[forcing_name].loc[0, "forcingtime_bin_count"] = pd.NA
 
+    def detect_catalog_gaps(self, event_count_bin_size="1D"):
+        """ """
+        if self.catalog is None:
+            warnings.warn(
+                "You need to define the `catalog` attribute. See `set_catalog`."
+            )
+            return
+        warnings.warn("This gap detection routine only works for high seismicity rates.")
+        event_occ = pd.Series(
+            index=pd.to_datetime(self.catalog["origin_time"]),
+            data=np.ones(len(self.catalog), dtype=np.int32),
+        )
+        event_count = (
+            event_occ.groupby(pd.Grouper(freq=event_count_bin_size)).sum().sort_index()
+        )
+        gaps = event_count[event_count == 0]
+        gaps = gaps.to_period(event_count_bin_size)
+
+        self.gaps = gaps.index
+
+    def flag_forcingtime_bins_in_gaps(self):
+        gaps = pd.IntervalIndex.from_arrays(
+            self.gaps.start_time.astype("datetime64[ms]").values.astype("float64")
+            / 1000.0,
+            self.gaps.end_time.astype("datetime64[ms]").values.astype("float64")
+            / 1000.0,
+        )
+        for forcing_name in self.forcingtime_bins:
+            indexes_in = (
+                pd.cut(
+                    self.forcingtime_bins[forcing_name][
+                        "forcingtime_bin_time_edges_sec"
+                    ],
+                    gaps,
+                    include_lowest=True,
+                )
+                .dropna()
+                .index
+            )
+            self.forcingtime_bins[forcing_name]["gaps"] = False
+            self.forcingtime_bins[forcing_name].loc[indexes_in, "gaps"] = True
+
+    def remove_gaps(self):
+        for forcing_name in self.forcingtime_bins:
+            self.forcingtime_bins[forcing_name] = self.forcingtime_bins[forcing_name][
+                    ~self.forcingtime_bins[forcing_name]["gaps"]
+                    ]
+
     def measure_modulation(
         self, window_time, forcing_name, rate_estimate_kwargs={}, **kwargs
     ):
@@ -371,9 +467,9 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 "You need to define the `catalog` attribute. See `set_catalog`."
             )
             return
-        if self.forcing is None:
+        if self.forcingtime_bins is None:
             warnings.warn(
-                "You need to define the `forcing` attribute. See `set_forcing`."
+                "You need to call `build_forcingtime_bins` and `count_events_in_forcingtime_bins` first."
             )
             return
 

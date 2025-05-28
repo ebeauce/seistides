@@ -32,21 +32,20 @@ def estimate_rate_forcingtime_bins(
     duration_vs_forcing = np.zeros(num_bins)
     duration_vs_forcing_std = np.zeros(num_bins)
 
-    if num_std_cutoff > 0.0:
-        if "forcingtime_bin_rate" in forcingtime_bins:
-            r_ = forcingtime_bins["forcingtime_bin_rate"]
-        else:
-            r_ = (
-                forcingtime_bins["forcingtime_bin_count"]
-                / forcingtime_bins["forcingtime_bin_duration_sec"]
-            )
-        mean_ = r_.mean()
-        std_ = r_.std()
-        anomalous = r_ > mean_ + num_std_cutoff * std_
-        forcingtime_bins = forcingtime_bins[~anomalous]
+    #if num_std_cutoff > 0.0:
+    #    if "forcingtime_bin_rate" in forcingtime_bins:
+    #        r_ = forcingtime_bins["forcingtime_bin_rate"]
+    #    else:
+    #        r_ = (
+    #            forcingtime_bins["forcingtime_bin_count"]
+    #            / forcingtime_bins["forcingtime_bin_duration_sec"]
+    #        )
+    #    mean_ = r_.mean()
+    #    std_ = r_.std()
+    #    anomalous = r_ > mean_ + num_std_cutoff * std_
+    #    forcingtime_bins = forcingtime_bins[~anomalous]
 
     for i in range(num_bins):
-        bin_edge_idx = i + 1
         if cyclic_bins:
             bin_edge_indexes = (
                 np.arange(i - bin_extension, i + bin_extension + 1) % num_bins
@@ -62,22 +61,22 @@ def estimate_rate_forcingtime_bins(
             #(forcingtime_bins["forcing_leftbin_membership"] == bin_edge_idx)
             np.isin(forcingtime_bins["forcing_leftbin_membership"], bin_edge_indexes)
         )[0]
-        # if num_std_cutoff > 0.0:
-        #    mean_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
-        #        "forcingtime_bin_count"
-        #    ].mean()
-        #    std_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
-        #        "forcingtime_bin_count"
-        #    ].std()
-        #    anomalous = (
-        #        forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
-        #            "forcingtime_bin_count"
-        #        ]
-        #        > mean_ + num_std_cutoff * std_
-        #    )
-        #    selected_forcingtime_bin_indexes = selected_forcingtime_bin_indexes[
-        #        ~anomalous
-        #    ]
+        if num_std_cutoff > 0.0:
+           mean_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
+               "forcingtime_bin_count"
+           ].mean()
+           std_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
+               "forcingtime_bin_count"
+           ].std()
+           anomalous = (
+               forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
+                   "forcingtime_bin_count"
+               ]
+               > mean_ + num_std_cutoff * std_
+           )
+           selected_forcingtime_bin_indexes = selected_forcingtime_bin_indexes[
+               ~anomalous
+           ]
         if num_bootstraps > 0:
             rates = np.zeros(num_bootstraps)
             counts = np.zeros(num_bootstraps)
@@ -129,7 +128,6 @@ def estimate_rate_forcingtime_bins(
     if average_rate == 0.0:
         average_rate = 1.0
 
-    # can re-work to return expected_rate and observed_rate
     output = {
         "relative_rate": rate_vs_forcing / average_rate,
         "relative_rate_err": rate_vs_forcing_std / average_rate,
@@ -528,6 +526,25 @@ def composite_rate_estimate(
             seismicity_vs_forcing[f"{field}_err"] = np.mean(
                 all_windows, axis=-1
             ).astype("float32")
+        #elif (
+        #        (f"{field}_err" in seismicity_vs_forcing_short_win[0])
+        #        and (seismicity_vs_forcing_short_win[0][f"{field}_err"].sum() > 0.)
+        #        ):
+        #    seismicity_vs_forcing[field] = operator(all_windows)
+        #    all_windows_err = np.stack(
+        #        [
+        #            seismicity_vs_forcing_short_win[i][f"{field}_err"]
+        #            for i in range(num_short_windows)
+        #            if valid_window[i]
+        #        ],
+        #        axis=-1,
+        #    )
+        #    seismicity_vs_forcing[f"{field}_err"] = np.mean(
+        #            all_windows_err, axis=-1
+        #            )
+        #    if field == "relative_rate":
+        #        print(all_windows_err, all_windows_err.shape)
+        #        print(seismicity_vs_forcing[f"{field}_err"])
         else:
             (
                 seismicity_vs_forcing[field],
