@@ -32,7 +32,7 @@ def estimate_rate_forcingtime_bins(
     duration_vs_forcing = np.zeros(num_bins)
     duration_vs_forcing_std = np.zeros(num_bins)
 
-    #if num_std_cutoff > 0.0:
+    # if num_std_cutoff > 0.0:
     #    if "forcingtime_bin_rate" in forcingtime_bins:
     #        r_ = forcingtime_bins["forcingtime_bin_rate"]
     #    else:
@@ -40,9 +40,18 @@ def estimate_rate_forcingtime_bins(
     #            forcingtime_bins["forcingtime_bin_count"]
     #            / forcingtime_bins["forcingtime_bin_duration_sec"]
     #        )
-    #    mean_ = r_.mean()
-    #    std_ = r_.std()
-    #    anomalous = r_ > mean_ + num_std_cutoff * std_
+    #    non_zero = r_ > 0.
+    #    if np.sum(non_zero) > 2:
+    #        mean_ = r_[non_zero].mean()
+    #        std_ = r_[non_zero].std()
+    #        anomalous = r_ > mean_ + num_std_cutoff * std_
+    #    else:
+    #        anomalous = np.zeros(len(forcingtime_bins), dtype=bool)
+    #    #mean_ = r_.mean()
+    #    #std_ = r_.std()
+    #    #anomalous = r_ > mean_ + num_std_cutoff * std_
+    #    if np.sum(anomalous) > 0:
+    #        print(f"mean={mean_:.2e}, std={std_:.2e}, anomalous: ", r_[anomalous].values)
     #    forcingtime_bins = forcingtime_bins[~anomalous]
 
     for i in range(num_bins):
@@ -58,25 +67,50 @@ def estimate_rate_forcingtime_bins(
                 + 1
             )
         selected_forcingtime_bin_indexes = np.where(
-            #(forcingtime_bins["forcing_leftbin_membership"] == bin_edge_idx)
+            # (forcingtime_bins["forcing_leftbin_membership"] == bin_edge_idx)
             np.isin(forcingtime_bins["forcing_leftbin_membership"], bin_edge_indexes)
         )[0]
         if num_std_cutoff > 0.0:
-           mean_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
-               "forcingtime_bin_count"
-           ].mean()
-           std_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
-               "forcingtime_bin_count"
-           ].std()
-           anomalous = (
-               forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
-                   "forcingtime_bin_count"
-               ]
-               > mean_ + num_std_cutoff * std_
-           )
-           selected_forcingtime_bin_indexes = selected_forcingtime_bin_indexes[
-               ~anomalous
-           ]
+            non_zero = (
+                forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
+                    "forcingtime_bin_count"
+                ]
+                > 0.0
+            )
+            if np.sum(non_zero) > 2:
+                r_ = (
+                    forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
+                        "forcingtime_bin_count"
+                    ]
+                    / forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
+                        "forcingtime_bin_duration_sec"
+                    ]
+                )
+                mean_ = r_[non_zero].mean()
+                std_ = r_[non_zero].std()
+                anomalous = r_ > mean_ + num_std_cutoff * std_
+            else:
+                anomalous = np.zeros(
+                        len(selected_forcingtime_bin_indexes), dtype=bool
+                        )
+            if np.sum(anomalous) > 0:
+                print(f"mean={mean_:.2e}, std={std_:.2e}, anomalous: ", r_[anomalous].values)
+
+            # mean_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
+            #    "forcingtime_bin_count"
+            # ].mean()
+            # std_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
+            #    "forcingtime_bin_count"
+            # ].std()
+            # anomalous = (
+            #    forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
+            #        "forcingtime_bin_count"
+            #    ]
+            #    > mean_ + num_std_cutoff * std_
+            # )
+            selected_forcingtime_bin_indexes = selected_forcingtime_bin_indexes[
+                ~anomalous
+            ]
         if num_bootstraps > 0:
             rates = np.zeros(num_bootstraps)
             counts = np.zeros(num_bootstraps)
@@ -526,7 +560,7 @@ def composite_rate_estimate(
             seismicity_vs_forcing[f"{field}_err"] = np.mean(
                 all_windows, axis=-1
             ).astype("float32")
-        #elif (
+        # elif (
         #        (f"{field}_err" in seismicity_vs_forcing_short_win[0])
         #        and (seismicity_vs_forcing_short_win[0][f"{field}_err"].sum() > 0.)
         #        ):
