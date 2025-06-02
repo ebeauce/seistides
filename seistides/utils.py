@@ -90,11 +90,12 @@ def estimate_rate_forcingtime_bins(
                 std_ = r_[non_zero].std()
                 anomalous = r_ > mean_ + num_std_cutoff * std_
             else:
-                anomalous = np.zeros(
-                        len(selected_forcingtime_bin_indexes), dtype=bool
-                        )
+                anomalous = np.zeros(len(selected_forcingtime_bin_indexes), dtype=bool)
             if np.sum(anomalous) > 0:
-                print(f"mean={mean_:.2e}, std={std_:.2e}, anomalous: ", r_[anomalous].values)
+                print(
+                    f"mean={mean_:.2e}, std={std_:.2e}, anomalous: ",
+                    r_[anomalous].values,
+                )
 
             # mean_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
             #    "forcingtime_bin_count"
@@ -374,7 +375,8 @@ def composite_rate_estimate(
         "median",
         "weighted_mean",
         "svd",
-    }, "aggregate should be either of 'mean', 'median' or 'svd'"
+        "svd-stochastic",
+    }, "aggregate should be either of 'mean', 'median', 'svd' or 'svd-stochastic'"
 
     if aggregate == "median":
         # operator = partial(np.ma.median, axis=-1)
@@ -386,6 +388,9 @@ def composite_rate_estimate(
         pulling_operator = np.mean
     elif aggregate == "svd":
         operator = get_singular_vector
+        pulling_operator = np.mean
+    elif aggregate == "svd-stochastic":
+        operator = get_singular_vector_stochastic
         pulling_operator = np.mean
 
     short_window_dur = relativedelta(days=short_window_days)
@@ -1414,11 +1419,66 @@ def get_singular_vector(x, singular_value_index=0):
     """
     from scipy.linalg import svd
 
-    V, S, Ut = svd(x, full_matrices=False)
+    V, S, Ut = svd(x - 1., full_matrices=False)
 
     singular_vector = V[:, singular_value_index]
-    sign = np.sign(np.sum(np.sign(Ut[singular_value_index, :])))
-    return sign * singular_vector
+    # sign = np.sign(np.sum(np.sign(Ut[singular_value_index, :])))
+    # return sign * singular_vector
+
+    coeff = np.mean(Ut[singular_value_index, :] * S[singular_value_index])
+    return 1. + coeff * singular_vector
+
+
+def get_singular_vector2(x, singular_value_index=0):
+    """
+    Parameters
+    ----------
+    x : numpy.ndarray
+        (num_bins, num_windows) ndarray.
+    """
+    from scipy.linalg import svd
+
+    V, S, Ut = svd(x - 1., full_matrices=False)
+
+    singular_vector0 = V[:, 0]
+    coeff0 = np.median(Ut[0, :] * S[0])
+
+    singular_vector1 = V[:, 1]
+    coeff1 = np.median(Ut[1, :] * S[1])
+
+    if abs(coeff1) > 0.8 * abs(coeff0):
+        return 1. + np.mean(Ut[1, :] * S[1]) * singular_vector1
+    else:
+        return 1. + np.mean(Ut[0, :] * S[0]) * singular_vector0
+
+
+def get_singular_vector_stochastic(x, max_singular_values=3):
+    """
+    Parameters
+    ----------
+    x : numpy.ndarray
+        (num_bins, num_windows) ndarray.
+    """
+    from scipy.linalg import svd
+
+    V, S, Ut = svd(x - 1.0, full_matrices=False)
+
+    num_singular_values = max(max_singular_values, len(S))
+
+    weights = np.abs(
+        np.median(Ut[:num_singular_values, :] * S[:num_singular_values, None]**2, axis=1)
+    )
+    weights /= weights.sum()
+
+    singular_vector_index = np.random.choice(
+        np.arange(num_singular_values), p=weights, size=1
+    )[0]
+
+    return (
+        1.0
+        + np.mean(Ut[singular_vector_index, :] * S[singular_vector_index])
+        * V[:, singular_vector_index]
+    )
 
 
 def compute_AIC(residuals, num_params):
