@@ -1422,8 +1422,6 @@ def get_singular_vector(x, singular_value_index=0):
     V, S, Ut = svd(x - 1., full_matrices=False)
 
     singular_vector = V[:, singular_value_index]
-    # sign = np.sign(np.sum(np.sign(Ut[singular_value_index, :])))
-    # return sign * singular_vector
 
     coeff = np.mean(Ut[singular_value_index, :] * S[singular_value_index])
     return 1. + coeff * singular_vector
@@ -1451,8 +1449,26 @@ def get_singular_vector2(x, singular_value_index=0):
     else:
         return 1. + np.mean(Ut[0, :] * S[0]) * singular_vector0
 
+def get_singular_vector3(x, singular_value_index=0):
+    """
+    Parameters
+    ----------
+    x : numpy.ndarray
+        (num_bins, num_windows) ndarray.
+    """
+    from scipy.linalg import svd
 
-def get_singular_vector_stochastic(x, max_singular_values=3):
+    V, S, Ut = svd(x - 1., full_matrices=False)
+
+    singular_vector0 = V[:, 0]
+    coeff0 = np.median(Ut[0, :] * S[0])
+
+    singular_vector1 = V[:, 1]
+    coeff1 = np.median(Ut[1, :] * S[1])
+
+    return 1. + coeff0 * singular_vector0 + coeff1 * singular_vector1
+
+def get_singular_vector_stochastic(x, max_singular_values=5):
     """
     Parameters
     ----------
@@ -1463,21 +1479,23 @@ def get_singular_vector_stochastic(x, max_singular_values=3):
 
     V, S, Ut = svd(x - 1.0, full_matrices=False)
 
-    num_singular_values = max(max_singular_values, len(S))
+    num_singular_values = min(max_singular_values, len(S))
 
-    weights = np.abs(
-        np.median(Ut[:num_singular_values, :] * S[:num_singular_values, None]**2, axis=1)
-    )
+    coefficients = np.median(
+            Ut[:num_singular_values, :] * S[:num_singular_values, None], axis=1
+            )
+
+    weights = np.abs(coefficients)
     weights /= weights.sum()
 
+
     singular_vector_index = np.random.choice(
-        np.arange(num_singular_values), p=weights, size=1
-    )[0]
+        np.arange(len(weights)), p=weights, size=len(weights), replace=False
+    )
 
     return (
         1.0
-        + np.mean(Ut[singular_vector_index, :] * S[singular_vector_index])
-        * V[:, singular_vector_index]
+        + np.sum(coefficients[None, singular_vector_index] * V[:, singular_vector_index], axis=1)
     )
 
 
