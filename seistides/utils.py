@@ -327,6 +327,7 @@ def composite_rate_estimate(
     min_num_events_in_short_window=10,
     min_fraction_of_valid_windows=0.50,
     keep_short_windows=False,
+    aggregate_kwargs={},
     progress=False,
 ):
     """Count number of earthquakes in phase bins with bootstrapping analysis.
@@ -380,17 +381,17 @@ def composite_rate_estimate(
 
     if aggregate == "median":
         # operator = partial(np.ma.median, axis=-1)
-        operator = partial(np.median, axis=-1)
+        operator = partial(np.median, axis=-1, **aggregate_kwargs)
         pulling_operator = np.median
     elif aggregate == "mean":
         # operator = partial(np.ma.mean, axis=-1)
-        operator = partial(np.mean, axis=-1)
+        operator = partial(np.mean, axis=-1, **aggregate_kwargs)
         pulling_operator = np.mean
     elif aggregate == "svd":
-        operator = get_singular_vector
+        operator = partial(get_singular_vector3, **aggregate_kwargs)
         pulling_operator = np.mean
     elif aggregate == "svd-stochastic":
-        operator = get_singular_vector_stochastic
+        operator = partial(get_singular_vector_stochastic, **aggregate_kwargs)
         pulling_operator = np.mean
 
     short_window_dur = relativedelta(days=short_window_days)
@@ -1449,7 +1450,7 @@ def get_singular_vector2(x, singular_value_index=0):
     else:
         return 1. + np.mean(Ut[0, :] * S[0]) * singular_vector0
 
-def get_singular_vector3(x, singular_value_index=0):
+def get_singular_vector3(x, reconstruction_factor=0.66):
     """
     Parameters
     ----------
@@ -1460,15 +1461,25 @@ def get_singular_vector3(x, singular_value_index=0):
 
     V, S, Ut = svd(x - 1., full_matrices=False)
 
-    singular_vector0 = V[:, 0]
-    coeff0 = np.median(Ut[0, :] * S[0])
+    #num_singular_values = min(max_singular_values, len(S))
 
-    singular_vector1 = V[:, 1]
-    coeff1 = np.median(Ut[1, :] * S[1])
+    #coefficients = np.median(
+    #        Ut[:num_singular_values, :] * S[:num_singular_values, None], axis=1
+    #            )
+    coefficients = np.median(
+            Ut * S[:, None], axis=1
+                )
 
-    return 1. + coeff0 * singular_vector0 + coeff1 * singular_vector1
+    weights = np.abs(coefficients)
+    weights /= weights.sum()
 
-def get_singular_vector_stochastic(x, max_singular_values=5):
+    first_above_threshold = np.where(np.cumsum(weights) >= reconstruction_factor)[0][0]
+    indexes = np.arange(first_above_threshold + 1)
+
+    #return 1. + coeff0 * singular_vector0 + coeff1 * singular_vector1
+    return 1. + np.sum(coefficients[None, indexes] * V[:, indexes], axis=1)
+
+def get_singular_vector_stochastic(x, max_singular_values=3):
     """
     Parameters
     ----------
