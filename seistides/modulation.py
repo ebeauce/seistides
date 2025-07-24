@@ -99,7 +99,7 @@ class Modulationmeter(ABC):
         dt_forcing = (self.forcing.index[1] - self.forcing.index[0])#.total_seconds()
         within_catalog = (
                 (self.forcing.index > cat_t_min - dt_forcing)
-                & (self.forcing.index < cat_t_max + dt_forcing)
+                & (self.forcing.index < cat_t_max + pd.Timedelta("1d"))
                 )
         self.forcing = self.forcing[within_catalog]
 
@@ -298,6 +298,44 @@ class Modulationmeter(ABC):
 
     def set_forcing_bins(self, forcing_bins):
         self.forcing_bins = forcing_bins
+
+    def shuffle_catalog(self, method="bloc", **kwargs):
+        """
+        """
+        if self.catalog is None:
+            warnings.warn(
+                "You need to define the `catalog` attribute. See `set_catalog`."
+            )
+            return
+        if method == "bloc":
+            self._bloc_shuffle_catalog(**kwargs)
+        else:
+            warnings.warn(
+                    "'method' should be one of ['bloc']."
+                    )
+            return
+
+    def _bloc_shuffle_catalog(self, num_events_per_bloc=1000):
+        # differentiate times
+        wt = np.diff(self.catalog["t_eq_s"])
+        wt = np.hstack(
+                (wt.mean(), wt)
+                )
+        # attribute bloc membership
+        indexes = np.arange(len(self.catalog))
+        bloc_membership = indexes // num_events_per_bloc
+        num_blocs = bloc_membership.max() + 1
+        bloc_indexes = np.arange(num_blocs)
+        blocs = [np.where(bloc_membership == i)[0] for i in bloc_indexes]
+        # shuffle blocs
+        np.random.shuffle(bloc_indexes)
+        wt_shuffled = np.hstack([wt[blocs[i]] for i in bloc_indexes])
+        t_eq_s = np.cumsum(wt_shuffled) + self.catalog["t_eq_s"].min() - wt[0]
+        if not hasattr(self, "random_catalog"):
+            self.random_catalog = self.catalog[["t_eq_s", "origin_time"]].copy()
+        self.random_catalog["origin_time"] = pd.to_datetime(t_eq_s, unit="s")
+        self.random_catalog["t_eq_s"] = t_eq_s
+        self.random_catalog.sort_values("t_eq_s", inplace=True)
 
     def write(self, path):
         with open(path, "wb") as fout:
