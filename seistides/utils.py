@@ -67,7 +67,6 @@ def estimate_rate_forcingtime_bins(
                 + 1
             )
         selected_forcingtime_bin_indexes = np.where(
-            # (forcingtime_bins["forcing_leftbin_membership"] == bin_edge_idx)
             np.isin(forcingtime_bins["forcing_leftbin_membership"], bin_edge_indexes)
         )[0]
         if num_std_cutoff > 0.0:
@@ -97,18 +96,6 @@ def estimate_rate_forcingtime_bins(
                     r_[anomalous].values,
                 )
 
-            # mean_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
-            #    "forcingtime_bin_count"
-            # ].mean()
-            # std_ = forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
-            #    "forcingtime_bin_count"
-            # ].std()
-            # anomalous = (
-            #    forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
-            #        "forcingtime_bin_count"
-            #    ]
-            #    > mean_ + num_std_cutoff * std_
-            # )
             selected_forcingtime_bin_indexes = selected_forcingtime_bin_indexes[
                 ~anomalous
             ]
