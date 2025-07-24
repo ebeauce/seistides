@@ -29,6 +29,8 @@ class Modulationmeter(ABC):
             "forward",
             "backward",
         }, "window_type should be either of 'backward' or 'forward'."
+        if downsample is None:
+            downsample = 0
         self.downsample = downsample
         self.catalog = catalog
         self.forcing = forcing

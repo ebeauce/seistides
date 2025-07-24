@@ -1126,7 +1126,7 @@ def load_tidal_stress(
 
     # calendar time of stress time series
     time = pd.Series(
-        pd.date_range(start=starttime, freq=f"{delta/3600.}H", periods=n_samples)
+        pd.date_range(start=starttime, freq=f"{delta/3600.}h", periods=n_samples)
     )
     tvec_tide = np.arange(0, n_samples) * delta + tref
 
