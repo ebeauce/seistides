@@ -81,6 +81,28 @@ class Modulationmeter(ABC):
             self.modulation[forcing_name][window_time]["bins"]
         )
 
+    def adjust_forcing_table_to_catalog(self):
+        """Adjust forcing table to the catalog's time span.
+        """
+        if self.catalog is None:
+            warnings.warn(
+                "You need to define the `catalog` attribute. See `set_catalog`."
+            )
+            return
+        if self.forcing is None:
+            warnings.warn(
+                "You need to define the `forcing` attribute. See `set_forcing`."
+            )
+            return
+        cat_t_min = self.catalog["origin_time"].min()
+        cat_t_max = self.catalog["origin_time"].max()
+        dt_forcing = (self.forcing.index[1] - self.forcing.index[0])#.total_seconds()
+        within_catalog = (
+                (self.forcing.index > cat_t_min - dt_forcing)
+                & (self.forcing.index < cat_t_max + dt_forcing)
+                )
+        self.forcing = self.forcing[within_catalog]
+
     def get_parameter_time_series(self, forcing_name, model_name="model1"):
         """
         Retrieve time series of parameters and errors for a given forcing and model.
@@ -384,6 +406,17 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
             ):
                 warnings.warn(
                     "Forcing time series stop before end of catalog! "
+                    "Aborting `count_events_in_forcingtime_bins`."
+                )
+                continue
+            if (
+                self.catalog["t_eq_s"].values.min()
+                < self.forcingtime_bins[forcing_name][
+                    "forcingtime_bin_time_edges_sec"
+                ].min()
+            ):
+                warnings.warn(
+                    "Forcing time series starts after beginning of catalog! "
                     "Aborting `count_events_in_forcingtime_bins`."
                 )
                 continue
