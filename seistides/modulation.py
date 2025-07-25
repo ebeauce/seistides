@@ -53,11 +53,16 @@ class Modulationmeter(ABC):
             )
             return
 
+        # 'hidden' kwarg for `shuffle_and_measure_modulation`
+        catalog = kwargs.get("catalog", None)
+        if catalog is None:
+            catalog = self.catalog
+
         ## -----------------------------------------------
         ## here, write func(args, kwargs) appropriately
         ## for example:
         # modulation = func(
-        #    self.catalog,
+        #    catalog,
         #    self.forcing,
         #    window_time,
         #    forcing_name,
@@ -149,6 +154,10 @@ class Modulationmeter(ABC):
                 parameters[param].append(_mod["parameters"][param])
             for err in _mod["errors"]:
                 errors[err].append(_mod["errors"][err])
+        for param in _mod["parameters"]:
+            parameters[param] = np.asarray(parameters[param])
+        for err in _mod["errors"]:
+            errors[err] = np.asarray(errors[err])
         return time, parameters, errors
 
     def get_model_performance_time_series(self, forcing_name, model_name="model1"):
@@ -282,39 +291,6 @@ class Modulationmeter(ABC):
     def set_forcing_bins(self, forcing_bins):
         self.forcing_bins = forcing_bins
 
-    def shuffle_catalog(self, method="bloc", **kwargs):
-        """ """
-        if self.catalog is None:
-            warnings.warn(
-                "You need to define the `catalog` attribute. See `set_catalog`."
-            )
-            return
-        if method == "bloc":
-            self._bloc_shuffle_catalog(**kwargs)
-        else:
-            warnings.warn("'method' should be one of ['bloc'].")
-            return
-
-    def _bloc_shuffle_catalog(self, num_events_per_bloc=1000):
-        # differentiate times
-        wt = np.diff(self.catalog["t_eq_s"])
-        wt = np.hstack((wt.mean(), wt))
-        # attribute bloc membership
-        indexes = np.arange(len(self.catalog))
-        bloc_membership = indexes // num_events_per_bloc
-        num_blocs = bloc_membership.max() + 1
-        bloc_indexes = np.arange(num_blocs)
-        blocs = [np.where(bloc_membership == i)[0] for i in bloc_indexes]
-        # shuffle blocs
-        np.random.shuffle(bloc_indexes)
-        wt_shuffled = np.hstack([wt[blocs[i]] for i in bloc_indexes])
-        t_eq_s = np.cumsum(wt_shuffled) + self.catalog["t_eq_s"].min() - wt[0]
-        if not hasattr(self, "random_catalog"):
-            self.random_catalog = self.catalog[["t_eq_s", "origin_time"]].copy()
-        self.random_catalog["origin_time"] = pd.to_datetime(t_eq_s, unit="s")
-        self.random_catalog["t_eq_s"] = t_eq_s
-        self.random_catalog.sort_values("t_eq_s", inplace=True)
-
     def write(self, path):
         with open(path, "wb") as fout:
             pickle.dump(self, fout)
@@ -412,10 +388,10 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
             }
             self.forcingtime_bins[forcing_name] = pd.DataFrame(forcingtime_bins)
             self.forcingtime_bins[forcing_name]["forcing_leftbin_membership"] = (
-                    self.forcingtime_bins[forcing_name]["forcing_leftbin_membership"].astype(
-                        "category"
-                        )
-                    )
+                self.forcingtime_bins[forcing_name][
+                    "forcing_leftbin_membership"
+                ].astype("category")
+            )
 
     def count_events_in_forcingtime_bins(
         self, attach_membership_to_cat=False, use_random_catalog=False
@@ -539,6 +515,11 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
             )
             return
 
+        # 'hidden' kwarg for `shuffle_and_measure_modulation`
+        catalog = kwargs.get("catalog", None)
+        if catalog is None:
+            catalog = self.catalog
+
         # -----------------------------------------------
         #                define window
         assert self.window_type in {
@@ -555,9 +536,8 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
         # -----------------------------------------------
 
         # -----------------------------------------------
-        subcat = self.catalog[
-            (self.catalog["origin_time"] > t_start)
-            & (self.catalog["origin_time"] <= t_end)
+        subcat = catalog[
+            (catalog["origin_time"] > t_start) & (catalog["origin_time"] <= t_end)
         ]
         subforcingtime_bins = self.forcingtime_bins[forcing_name]
         subforcingtime_bins = subforcingtime_bins[
@@ -654,10 +634,15 @@ class ModulationmeterMultiWindows(Modulationmeter):
             )
             return
 
+        # 'hidden' kwarg for `shuffle_and_measure_modulation`
+        catalog = kwargs.get("catalog", None)
+        if catalog is None:
+            catalog = self.catalog
+
         func = partial(utils.estimate_rate_forcing_bins, **rate_estimate_kwargs)
 
         modulation = utils.composite_rate_estimate(
-            self.catalog,
+            catalog,
             self.forcing[forcing_name],
             self.forcing_bins[forcing_name],
             window_time,
@@ -723,10 +708,15 @@ class ModulationmeterMultiWindowForcingTimeBins(
             )
             return
 
+        # 'hidden' kwarg for `shuffle_and_measure_modulation`
+        catalog = kwargs.get("catalog", None)
+        if catalog is None:
+            catalog = self.catalog
+
         func = partial(utils.estimate_rate_forcingtime_bins, **rate_estimate_kwargs)
 
         modulation = utils.composite_rate_estimate(
-            self.catalog,
+            catalog,
             self.forcingtime_bins[forcing_name],
             self.forcing_bins[forcing_name],
             window_time,
@@ -750,3 +740,78 @@ class ModulationmeterMultiWindowForcingTimeBins(
         self.modulation[forcing_name][window_time]["midbins"] = self._midbins(
             self.modulation[forcing_name][window_time]["bins"]
         )
+
+
+# --------------------------------------------------------------------
+class ShuffledModulationmeter(Modulationmeter):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.replica_counts = {}
+        self.original_catalog = self.catalog.copy()
+
+    def shuffle_catalog(self, method="bloc", **kwargs):
+        """ """
+        if self.catalog is None:
+            warnings.warn(
+                "You need to define the `catalog` attribute. See `set_catalog`."
+            )
+            return
+        if method == "bloc":
+            self._bloc_shuffle_catalog(**kwargs)
+        else:
+            warnings.warn("'method' should be one of ['bloc'].")
+            return
+
+    def _bloc_shuffle_catalog(self, num_events_per_bloc=1000):
+        """
+        """
+        # differentiate times
+        wt = np.diff(self.catalog["t_eq_s"])
+        wt = np.hstack((wt.mean(), wt))
+        # attribute bloc membership
+        indexes = np.arange(len(self.catalog))
+        bloc_membership = indexes // num_events_per_bloc
+        num_blocs = bloc_membership.max() + 1
+        bloc_indexes = np.arange(num_blocs)
+        blocs = [np.where(bloc_membership == i)[0] for i in bloc_indexes]
+        # shuffle blocs
+        np.random.shuffle(bloc_indexes)
+        wt_shuffled = np.hstack([wt[blocs[i]] for i in bloc_indexes])
+        t_eq_s = np.cumsum(wt_shuffled) + self.catalog["t_eq_s"].min() - wt[0]
+        if not hasattr(self, "random_catalog"):
+            self.random_catalog = self.original_catalog[
+                ["t_eq_s", "origin_time"]
+            ].copy()
+        self.random_catalog["origin_time"] = pd.to_datetime(t_eq_s, unit="s")
+        self.random_catalog["t_eq_s"] = t_eq_s
+        self.random_catalog.sort_values("t_eq_s", inplace=True)
+
+    def shuffle_and_measure_modulation(
+        self, window_time, forcing_names, shuffle_kwargs={}, **kwargs
+    ):
+        """
+        """
+        self.shuffle_catalog(**shuffle_kwargs)
+        self.catalog = self.random_catalog
+
+        for forcing_name in np.atleast_1d(forcing_names):
+            if not forcing_name in self.replica_counts:
+                self.replica_counts[forcing_name] = 0
+            self.replica_counts[forcing_name] += 1
+            rep_count = self.replica_counts[forcing_name]
+
+            self.measure_modulation(window_time, forcing_name, **kwargs)
+
+            self.modulation[forcing_name][f"replica{rep_count}"] = self.modulation[
+                forcing_name
+            ][window_time]
+            del self.modulation[forcing_name][window_time]
+
+
+class ShuffledModulationmeterMultiWindowForcingTimeBins(
+    ModulationmeterMultiWindowForcingTimeBins, ShuffledModulationmeter
+):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
