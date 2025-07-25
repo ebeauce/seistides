@@ -13,6 +13,7 @@ except ImportError:
     from scipy.stats import median_abs_deviation as scimad
 from tqdm import tqdm
 
+from time import time as give_time
 
 def estimate_rate_forcingtime_bins(
     cat,
@@ -25,35 +26,19 @@ def estimate_rate_forcingtime_bins(
 ):
     num_bins = len(forcing_bin_edges) - 1
 
+    # initialize output arrays
     rate_vs_forcing = np.zeros(num_bins)
     rate_vs_forcing_std = np.zeros(num_bins)
     count_vs_forcing = np.zeros(num_bins)
     count_vs_forcing_std = np.zeros(num_bins)
     duration_vs_forcing = np.zeros(num_bins)
     duration_vs_forcing_std = np.zeros(num_bins)
-
-    # if num_std_cutoff > 0.0:
-    #    if "forcingtime_bin_rate" in forcingtime_bins:
-    #        r_ = forcingtime_bins["forcingtime_bin_rate"]
-    #    else:
-    #        r_ = (
-    #            forcingtime_bins["forcingtime_bin_count"]
-    #            / forcingtime_bins["forcingtime_bin_duration_sec"]
-    #        )
-    #    non_zero = r_ > 0.
-    #    if np.sum(non_zero) > 2:
-    #        mean_ = r_[non_zero].mean()
-    #        std_ = r_[non_zero].std()
-    #        anomalous = r_ > mean_ + num_std_cutoff * std_
-    #    else:
-    #        anomalous = np.zeros(len(forcingtime_bins), dtype=bool)
-    #    #mean_ = r_.mean()
-    #    #std_ = r_.std()
-    #    #anomalous = r_ > mean_ + num_std_cutoff * std_
-    #    if np.sum(anomalous) > 0:
-    #        print(f"mean={mean_:.2e}, std={std_:.2e}, anomalous: ", r_[anomalous].values)
-    #    forcingtime_bins = forcingtime_bins[~anomalous]
-
+    # fetch input numpy arrays from pandas DataFrame
+    forcingtime_bin_count = forcingtime_bins["forcingtime_bin_count"].values
+    forcingtime_bin_duration_sec = forcingtime_bins[
+        "forcingtime_bin_duration_sec"
+    ].values
+        
     for i in range(num_bins):
         if cyclic_bins:
             bin_edge_indexes = (
@@ -66,24 +51,21 @@ def estimate_rate_forcingtime_bins(
                 )
                 + 1
             )
+
         selected_forcingtime_bin_indexes = np.where(
-            np.isin(forcingtime_bins["forcing_leftbin_membership"], bin_edge_indexes)
-        )[0]
+                forcingtime_bins["forcing_leftbin_membership"].isin(bin_edge_indexes).values
+                )[0]
+
+        #selected_forcingtime_bin_indexes = np.where(
+        #    np.isin(forcingtime_bins["forcing_leftbin_membership"], bin_edge_indexes)
+        #)[0]
+
         if num_std_cutoff > 0.0:
-            non_zero = (
-                forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
-                    "forcingtime_bin_count"
-                ]
-                > 0.0
-            )
+            non_zero = forcingtime_bin_count[selected_forcingtime_bin_indexes] > 0.0
             if np.sum(non_zero) > 2:
                 r_ = (
-                    forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
-                        "forcingtime_bin_count"
-                    ]
-                    / forcingtime_bins.iloc[selected_forcingtime_bin_indexes][
-                        "forcingtime_bin_duration_sec"
-                    ]
+                    forcingtime_bin_count[selected_forcingtime_bin_indexes]
+                    / forcingtime_bin_duration_sec[selected_forcingtime_bin_indexes]
                 )
                 mean_ = r_[non_zero].mean()
                 std_ = r_[non_zero].std()
@@ -109,19 +91,9 @@ def estimate_rate_forcingtime_bins(
                     len(selected_forcingtime_bin_indexes),
                     replace=True,
                 )
-                counts[j] = forcingtime_bins.iloc[indexes_b][
-                    "forcingtime_bin_count"
-                ].sum()
-                durations[j] = forcingtime_bins.iloc[indexes_b][
-                    "forcingtime_bin_duration_sec"
-                ].sum()
+                counts[j] = forcingtime_bin_count[indexes_b].sum()
+                durations[j] = forcingtime_bin_duration_sec[indexes_b].sum()
                 rates[j] = counts[j] / durations[j]
-            # variance_stabilized_r = np.sqrt(rates)
-            # robust_mean_estimate = np.median(
-            #    variance_stabilized_r[variance_stabilized_r > 0.0]
-            # )
-            # robust_mean_rate = robust_mean_estimate**2
-            # rate_vs_forcing[i] = robust_mean_rate
             rate_vs_forcing[i] = np.mean(rates)
             if np.isnan(rate_vs_forcing[i]):
                 print("!!!!!!!!!!!!!!! NAN !!!!!!!!!!!!!!!")
@@ -134,19 +106,15 @@ def estimate_rate_forcingtime_bins(
             duration_vs_forcing[i] = np.median(durations)
             duration_vs_forcing_std[i] = np.std(durations)
         else:
-            sel_forcingtime_bins = forcingtime_bins.iloc[
+            count_vs_forcing[i] = forcingtime_bin_count[
                 selected_forcingtime_bin_indexes
-            ]
-            count_vs_forcing[i] = sel_forcingtime_bins["forcingtime_bin_count"].sum()
-            duration_vs_forcing[i] = sel_forcingtime_bins[
-                "forcingtime_bin_duration_sec"
+            ].sum()
+            duration_vs_forcing[i] = forcingtime_bin_duration_sec[
+                selected_forcingtime_bin_indexes
             ].sum()
             rate_vs_forcing[i] = count_vs_forcing[i] / duration_vs_forcing[i]
 
-    average_rate = (
-        forcingtime_bins["forcingtime_bin_count"].sum()
-        / forcingtime_bins["forcingtime_bin_duration_sec"].sum()
-    )
+    average_rate = forcingtime_bin_count.sum() / forcingtime_bin_duration_sec.sum()
     if average_rate == 0.0:
         average_rate = 1.0
 
@@ -446,18 +414,18 @@ def composite_rate_estimate(
         )
         return
 
-    # define weights proportionally to bin_duration, because bin_duration
-    # is itself proportional to the time interval covered by the forcing bin
-    weights = np.stack(
-        [
-            seismicity_vs_forcing_short_win[i]["bin_duration"]
-            for i in range(num_short_windows)
-            if valid_window[i]
-        ],
-        axis=-1,
-    )
-    weights /= np.sum(weights, axis=-1, keepdims=True)
     if aggregate == "weighted_mean":
+        # define weights proportionally to bin_duration, because bin_duration
+        # is itself proportional to the time interval covered by the forcing bin
+        weights = np.stack(
+            [
+                seismicity_vs_forcing_short_win[i]["bin_duration"]
+                for i in range(num_short_windows)
+                if valid_window[i]
+            ],
+            axis=-1,
+        )
+        weights /= np.sum(weights, axis=-1, keepdims=True)
         operator = partial(_weighted_mean, weights=weights)
         pulling_operator = partial(np.mean, axis=-1)
 
@@ -490,12 +458,6 @@ def composite_rate_estimate(
             mad_across_windows[mad_across_windows == 0.0] = 0.2
 
             noise_power = np.median(mad_across_windows) ** 2
-            # noise_power = 1.48 * np.median(
-            #        np.abs(all_windows - np.median(all_windows))
-            #        )
-            # print(1.48 * np.median(
-            #        np.abs(all_windows - np.median(all_windows))
-            #        ))
 
             half_wiener_win = (
                 wiener_filter[0] // 2 + wiener_filter[0] % 2,
@@ -517,8 +479,8 @@ def composite_rate_estimate(
             if half_wiener_win[1] > 0:
                 all_windows = all_windows[:, half_wiener_win[1] : -half_wiener_win[1]]
 
-        if np.sum(np.isnan(all_windows)) > 0:
-            breakpoint()
+        # if np.sum(np.isnan(all_windows)) > 0:
+        #    breakpoint()
 
         if keep_short_windows:
             seismicity_vs_forcing[f"all_windows_{field}"] = all_windows
@@ -553,25 +515,6 @@ def composite_rate_estimate(
             seismicity_vs_forcing[f"{field}_err"] = np.mean(
                 all_windows, axis=-1
             ).astype("float32")
-        # elif (
-        #        (f"{field}_err" in seismicity_vs_forcing_short_win[0])
-        #        and (seismicity_vs_forcing_short_win[0][f"{field}_err"].sum() > 0.)
-        #        ):
-        #    seismicity_vs_forcing[field] = operator(all_windows)
-        #    all_windows_err = np.stack(
-        #        [
-        #            seismicity_vs_forcing_short_win[i][f"{field}_err"]
-        #            for i in range(num_short_windows)
-        #            if valid_window[i]
-        #        ],
-        #        axis=-1,
-        #    )
-        #    seismicity_vs_forcing[f"{field}_err"] = np.mean(
-        #            all_windows_err, axis=-1
-        #            )
-        #    if field == "relative_rate":
-        #        print(all_windows_err, all_windows_err.shape)
-        #        print(seismicity_vs_forcing[f"{field}_err"])
         else:
             (
                 seismicity_vs_forcing[field],
@@ -579,12 +522,6 @@ def composite_rate_estimate(
             ) = bootstrap_statistic(
                 all_windows, operator, n_bootstraps=num_bootstrap_for_errors
             )
-            # if field2 == "relative_rate":
-            #    bias = _jackknife_bias(
-            #            all_windows, operator, x_all=seismicity_vs_forcing[field1][field2]
-            #            )
-            #    #print(bias)
-            #    seismicity_vs_forcing[field1][field2] -= bias
 
         # -------------------------
         #       normalize
@@ -594,8 +531,6 @@ def composite_rate_estimate(
                 seismicity_vs_forcing[field]
             )
             seismicity_vs_forcing[field] /= np.ma.mean(seismicity_vs_forcing[field])
-        # elif field in {"observed_rate"}:
-        #    seismicity_vs_forcing[field] /= np.sum(seismicity_vs_forcing[field])
         # ---------------------------------------------------------
     seismicity_vs_forcing["bins"] = forcing_bin_edges
     if downsample > 0:
@@ -637,8 +572,11 @@ def bootstrap_statistic(x, operator, n_bootstraps=100):
         instances = np.zeros((n_bootstraps, x.shape[0]), dtype=np.float32)
     else:
         instances = np.zeros(n_bootstraps, dtype=np.float32)
+
     for i in range(n_bootstraps):
-        replica = x[..., np.random.randint(0, x.shape[-1] - 1, size=x.shape[-1])]
+        replica = np.take(
+            x, np.random.randint(0, x.shape[-1] - 1, size=x.shape[-1]), axis=-1
+        )
         instances[i] = operator(replica)
     return np.mean(instances, axis=0), np.std(instances, axis=0)
 
@@ -1407,12 +1345,12 @@ def get_singular_vector(x, singular_value_index=0):
     """
     from scipy.linalg import svd
 
-    V, S, Ut = svd(x - 1., full_matrices=False)
+    V, S, Ut = svd(x - 1.0, full_matrices=False)
 
     singular_vector = V[:, singular_value_index]
 
     coeff = np.mean(Ut[singular_value_index, :] * S[singular_value_index])
-    return 1. + coeff * singular_vector
+    return 1.0 + coeff * singular_vector
 
 
 def get_singular_vector2(x, singular_value_index=0):
@@ -1424,7 +1362,7 @@ def get_singular_vector2(x, singular_value_index=0):
     """
     from scipy.linalg import svd
 
-    V, S, Ut = svd(x - 1., full_matrices=False)
+    V, S, Ut = svd(x - 1.0, full_matrices=False)
 
     singular_vector0 = V[:, 0]
     coeff0 = np.median(Ut[0, :] * S[0])
@@ -1433,9 +1371,10 @@ def get_singular_vector2(x, singular_value_index=0):
     coeff1 = np.median(Ut[1, :] * S[1])
 
     if abs(coeff1) > 0.8 * abs(coeff0):
-        return 1. + np.mean(Ut[1, :] * S[1]) * singular_vector1
+        return 1.0 + np.mean(Ut[1, :] * S[1]) * singular_vector1
     else:
-        return 1. + np.mean(Ut[0, :] * S[0]) * singular_vector0
+        return 1.0 + np.mean(Ut[0, :] * S[0]) * singular_vector0
+
 
 def get_singular_vector3(x, reconstruction_factor=0.66):
     """
@@ -1446,16 +1385,9 @@ def get_singular_vector3(x, reconstruction_factor=0.66):
     """
     from scipy.linalg import svd
 
-    V, S, Ut = svd(x - 1., full_matrices=False)
+    V, S, Ut = svd(x - 1.0, full_matrices=False)
 
-    #num_singular_values = min(max_singular_values, len(S))
-
-    #coefficients = np.median(
-    #        Ut[:num_singular_values, :] * S[:num_singular_values, None], axis=1
-    #            )
-    coefficients = np.median(
-            Ut * S[:, None], axis=1
-                )
+    coefficients = np.median(Ut * S[:, None], axis=1)
 
     weights = np.abs(coefficients)
     weights /= weights.sum()
@@ -1463,8 +1395,8 @@ def get_singular_vector3(x, reconstruction_factor=0.66):
     first_above_threshold = np.where(np.cumsum(weights) >= reconstruction_factor)[0][0]
     indexes = np.arange(first_above_threshold + 1)
 
-    #return 1. + coeff0 * singular_vector0 + coeff1 * singular_vector1
-    return 1. + np.sum(coefficients[None, indexes] * V[:, indexes], axis=1)
+    return 1.0 + np.sum(coefficients[None, indexes] * V[:, indexes], axis=1)
+
 
 def get_singular_vector_stochastic(x, max_singular_values=3):
     """
@@ -1480,20 +1412,18 @@ def get_singular_vector_stochastic(x, max_singular_values=3):
     num_singular_values = min(max_singular_values, len(S))
 
     coefficients = np.median(
-            Ut[:num_singular_values, :] * S[:num_singular_values, None], axis=1
-            )
+        Ut[:num_singular_values, :] * S[:num_singular_values, None], axis=1
+    )
 
     weights = np.abs(coefficients)
     weights /= weights.sum()
-
 
     singular_vector_index = np.random.choice(
         np.arange(len(weights)), p=weights, size=len(weights), replace=False
     )
 
-    return (
-        1.0
-        + np.sum(coefficients[None, singular_vector_index] * V[:, singular_vector_index], axis=1)
+    return 1.0 + np.sum(
+        coefficients[None, singular_vector_index] * V[:, singular_vector_index], axis=1
     )
 
 

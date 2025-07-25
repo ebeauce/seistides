@@ -82,8 +82,7 @@ class Modulationmeter(ABC):
         )
 
     def adjust_forcing_table_to_catalog(self):
-        """Adjust forcing table to the catalog's time span.
-        """
+        """Adjust forcing table to the catalog's time span."""
         if self.catalog is None:
             warnings.warn(
                 "You need to define the `catalog` attribute. See `set_catalog`."
@@ -96,11 +95,10 @@ class Modulationmeter(ABC):
             return
         cat_t_min = self.catalog["origin_time"].min()
         cat_t_max = self.catalog["origin_time"].max()
-        dt_forcing = (self.forcing.index[1] - self.forcing.index[0])#.total_seconds()
-        within_catalog = (
-                (self.forcing.index > cat_t_min - dt_forcing)
-                & (self.forcing.index < cat_t_max + pd.Timedelta("1d"))
-                )
+        dt_forcing = self.forcing.index[1] - self.forcing.index[0]  # .total_seconds()
+        within_catalog = (self.forcing.index > cat_t_min - dt_forcing) & (
+            self.forcing.index < cat_t_max + pd.Timedelta("1d")
+        )
         self.forcing = self.forcing[within_catalog]
 
     def get_parameter_time_series(self, forcing_name, model_name="model1"):
@@ -195,41 +193,26 @@ class Modulationmeter(ABC):
         return time, performance_metrics
 
     def get_obs_vs_forcing_vs_time(self, forcing_name, obs_name):
-        """
-        """
-        time_periods = list(
-                self.modulation[forcing_name].keys()
-                )
+        """ """
+        time_periods = list(self.modulation[forcing_name].keys())
         time_periods.sort()
 
         obs = np.stack(
-                [
-                    self.modulation[forcing_name][tp][obs_name]
-                    for tp in time_periods
-                 ],
-                axis=0
-                )
+            [self.modulation[forcing_name][tp][obs_name] for tp in time_periods], axis=0
+        )
 
         return obs, pd.to_datetime(time_periods)
 
     def get_model_vs_forcing_vs_time(self, forcing_name, obs_name):
-        """
-        """
-        time_periods = list(
-                self.model[forcing_name].keys()
-                )
+        """ """
+        time_periods = list(self.model[forcing_name].keys())
         time_periods.sort()
 
         model = np.stack(
-                [
-                    self.model[forcing_name][tp][obs_name]
-                    for tp in time_periods
-                 ],
-                axis=0
-                )
+            [self.model[forcing_name][tp][obs_name] for tp in time_periods], axis=0
+        )
 
         return model, pd.to_datetime(time_periods)
-
 
     def fit_modulation(
         self,
@@ -300,8 +283,7 @@ class Modulationmeter(ABC):
         self.forcing_bins = forcing_bins
 
     def shuffle_catalog(self, method="bloc", **kwargs):
-        """
-        """
+        """ """
         if self.catalog is None:
             warnings.warn(
                 "You need to define the `catalog` attribute. See `set_catalog`."
@@ -310,17 +292,13 @@ class Modulationmeter(ABC):
         if method == "bloc":
             self._bloc_shuffle_catalog(**kwargs)
         else:
-            warnings.warn(
-                    "'method' should be one of ['bloc']."
-                    )
+            warnings.warn("'method' should be one of ['bloc'].")
             return
 
     def _bloc_shuffle_catalog(self, num_events_per_bloc=1000):
         # differentiate times
         wt = np.diff(self.catalog["t_eq_s"])
-        wt = np.hstack(
-                (wt.mean(), wt)
-                )
+        wt = np.hstack((wt.mean(), wt))
         # attribute bloc membership
         indexes = np.arange(len(self.catalog))
         bloc_membership = indexes // num_events_per_bloc
@@ -433,8 +411,23 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 ),
             }
             self.forcingtime_bins[forcing_name] = pd.DataFrame(forcingtime_bins)
+            self.forcingtime_bins[forcing_name]["forcing_leftbin_membership"] = (
+                    self.forcingtime_bins[forcing_name]["forcing_leftbin_membership"].astype(
+                        "category"
+                        )
+                    )
 
-    def count_events_in_forcingtime_bins(self, attach_membership_to_cat=False):
+    def count_events_in_forcingtime_bins(
+        self, attach_membership_to_cat=False, use_random_catalog=False
+    ):
+
+        if use_random_catalog and not hasattr(self, "random_catalog"):
+            warnings.warn("Call `self.shuffle_catalog` first.")
+            return
+        elif use_random_catalog:
+            _cat = self.random_catalog
+        else:
+            _cat = self.catalog
         for forcing_name in self.forcing_bins:
             if (
                 self.catalog["t_eq_s"].values.max()
@@ -459,13 +452,11 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 )
                 continue
             forcingtime_bin_eq_membership = np.digitize(
-                self.catalog["t_eq_s"].values,
+                _cat["t_eq_s"].values,
                 self.forcingtime_bins[forcing_name]["forcingtime_bin_time_edges_sec"],
             )
             if attach_membership_to_cat:
-                self.catalog[f"membership_{forcing_name}"] = (
-                    forcingtime_bin_eq_membership
-                )
+                _cat[f"membership_{forcing_name}"] = forcingtime_bin_eq_membership
             forcingtime_bin_values, forcingtime_bin_counts = np.unique(
                 forcingtime_bin_eq_membership, return_counts=True
             )
@@ -488,7 +479,9 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 "You need to define the `catalog` attribute. See `set_catalog`."
             )
             return
-        warnings.warn("This gap detection routine only works for high seismicity rates.")
+        warnings.warn(
+            "This gap detection routine only works for high seismicity rates."
+        )
         event_occ = pd.Series(
             index=pd.to_datetime(self.catalog["origin_time"]),
             data=np.ones(len(self.catalog), dtype=np.int32),
@@ -526,8 +519,8 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
     def remove_gaps(self):
         for forcing_name in self.forcingtime_bins:
             self.forcingtime_bins[forcing_name] = self.forcingtime_bins[forcing_name][
-                    ~self.forcingtime_bins[forcing_name]["gaps"]
-                    ]
+                ~self.forcingtime_bins[forcing_name]["gaps"]
+            ]
 
     def measure_modulation(
         self, window_time, forcing_name, rate_estimate_kwargs={}, **kwargs
