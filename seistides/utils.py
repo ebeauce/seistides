@@ -1436,3 +1436,20 @@ def compute_AIC(residuals, num_params):
         + num_samples
         + 2 * num_params
     )
+
+def robust_instantaneous_phase(x, degree=True):
+    """Instantaneous phase from  E. Poggiagliolmi , A. Vesnaver, GJI, 2014.
+
+    "Instantaneous phase and frequency derived without user-defined parameters"
+    """
+    from scipy.signal import hilbert
+    x_a = hilbert(x)
+    x_a = x_a / np.abs(x_a)
+    inst_freq = np.conj(x_a)[1:] * np.diff(x_a) * -1j
+    inst_phase = np.cumsum(np.real(inst_freq).astype("float64"))
+    # shift and wrap phase
+    inst_phase = (inst_phase + np.pi) % (2. * np.pi) - np.pi
+    if degree:
+        return np.rad2deg(inst_phase)
+    else:
+        return inst_phase
