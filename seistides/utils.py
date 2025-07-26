@@ -53,11 +53,11 @@ def estimate_rate_forcingtime_bins(
             )
 
         selected_forcingtime_bin_indexes = np.where(
-                forcingtime_bins["forcing_leftbin_membership"].isin(bin_edge_indexes).values
+                forcingtime_bins["forcing_bin_membership"].isin(bin_edge_indexes).values
                 )[0]
 
         #selected_forcingtime_bin_indexes = np.where(
-        #    np.isin(forcingtime_bins["forcing_leftbin_membership"], bin_edge_indexes)
+        #    np.isin(forcingtime_bins["forcing_bin_membership"], bin_edge_indexes)
         #)[0]
 
         if num_std_cutoff > 0.0:
@@ -375,8 +375,8 @@ def composite_rate_estimate(
             subforcing = forcing[(forcing.index > t_start) & (forcing.index <= t_end)]
         elif mode == "forcingtime":
             subforcing = forcing[
-                (forcing["forcingtime_bin_time_edges_sec"] > t_start.timestamp())
-                & (forcing["forcingtime_bin_time_edges_sec"] <= t_end.timestamp())
+                (forcing["forcingtime_bin_starttime_sec"] > t_start.timestamp())
+                & (forcing["forcingtime_bin_starttime_sec"] <= t_end.timestamp())
             ]
         seismicity_vs_forcing_short_win.append(
             func(
