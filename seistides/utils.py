@@ -72,11 +72,11 @@ def estimate_rate_forcingtime_bins(
                 anomalous = r_ > mean_ + num_std_cutoff * std_
             else:
                 anomalous = np.zeros(len(selected_forcingtime_bin_indexes), dtype=bool)
-            if np.sum(anomalous) > 0:
-                print(
-                    f"mean={mean_:.2e}, std={std_:.2e}, anomalous: ",
-                    r_[anomalous].values,
-                )
+            #if np.sum(anomalous) > 0:
+            #    print(
+            #        f"mean={mean_:.2e}, std={std_:.2e}, anomalous: ",
+            #        r_[anomalous],
+            #    )
 
             selected_forcingtime_bin_indexes = selected_forcingtime_bin_indexes[
                 ~anomalous
