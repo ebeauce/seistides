@@ -355,19 +355,43 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 self.forcing_bins[forcing_name],
             )
 
-            # arbitrary choice: when value is exactly at the bin edge,
-            # we assign it to the previous bin
-            if np.random.random() > 0.5:
-                forcing_bin_membership[
-                    forcing_bin_membership == len(self.forcing_bins[forcing_name])
-                ] = (
-                    len(self.forcing_bins[forcing_name]) - 1
-                )
+            # treat edge cases
+            bin_range = (
+                self.forcing_bins[forcing_name].max()
+                - self.forcing_bins[forcing_name].min()
+            )
+            if np.abs(bin_range - 360.0) < 0.1:
+                cyclic_bins = True
+            else:
+                cyclic_bins = False
+            bin_width = np.abs(
+                self.forcing_bins[forcing_name][1] - self.forcing_bins[forcing_name][0]
+            )
+
+            # upper edge
+            if cyclic_bins:
+                if np.random.random() > 0.5:
+                    forcing_bin_membership[
+                        forcing_bin_membership == len(self.forcing_bins[forcing_name])
+                    ] = (len(self.forcing_bins[forcing_name]) - 1)
+                else:
+                    forcing_bin_membership[
+                        forcing_bin_membership == len(self.forcing_bins[forcing_name])
+                    ] = 1
             else:
                 forcing_bin_membership[
                     forcing_bin_membership == len(self.forcing_bins[forcing_name])
-                ] = 1
-
+                ] = (len(self.forcing_bins[forcing_name]) - 1)
+            # lower edge
+            if cyclic_bins:
+                if np.random.random() > 0.5:
+                    forcing_bin_membership[forcing_bin_membership == 0] = (
+                        len(self.forcing_bins[forcing_name]) - 1
+                    )
+                else:
+                    forcing_bin_membership[forcing_bin_membership == 0] = 1
+            else:
+                forcing_bin_membership[forcing_bin_membership == 0] = 1
 
             # find when the forcing time series transitions from
             # one bin to another
@@ -375,10 +399,7 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
             # that the time series jumped from bin to another between
             # time_series[jumps_after[i]-1] and time_series[jumps_after[i]]
             jumps_after = (
-                np.abs(
-                    forcing_bin_membership[1:] - forcing_bin_membership[:-1]
-                )
-                > 0
+                np.abs(forcing_bin_membership[1:] - forcing_bin_membership[:-1]) > 0
             ).astype(bool)
             jumps_after = np.hstack((True, jumps_after))
             jumps_after = np.where(jumps_after)[0]
@@ -396,18 +417,6 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
 
             # ---------------------------------------------------------------
             if first_order_correction:
-                bin_range = (
-                    self.forcing_bins[forcing_name].max()
-                    - self.forcing_bins[forcing_name].min()
-                )
-                if np.abs(bin_range - 360.0) < 0.1:
-                    cyclic_bins = True
-                else:
-                    cyclic_bins = False
-                bin_width = np.abs(
-                    self.forcing_bins[forcing_name][1]
-                    - self.forcing_bins[forcing_name][0]
-                )
                 # define reference gradient for correction
                 # based on the assumption that the dominant period is about 12 hours
                 ref_gradient = bin_range / (12.0 * 3600.0)
@@ -448,7 +457,7 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                         - self.forcing[forcing_name].iloc[jumps_before].values
                     )
                 gradient = np.hstack((0.0, dforcing[1:] / dt))
-                #print("Gradient:", gradient.max(), gradient.min())
+                # print("Gradient:", gradient.max(), gradient.min())
                 target = np.zeros(
                     len(jumps_before), dtype=self.forcing_bins[forcing_name].dtype
                 )
@@ -515,29 +524,27 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 forcingtime_bin_starttime_sec[1:] - forcingtime_bin_starttime_sec[:-1]
             )
             forcingtime_bins = {
-                #"forcing_bin_membership": np.hstack(
+                # "forcing_bin_membership": np.hstack(
                 #    (pd.NA, forcing_bin_membership[jumps_after][:-1])
-                #),
-                #"forcing_bin_membership": np.hstack(
+                # ),
+                # "forcing_bin_membership": np.hstack(
                 #    (forcing_bin_membership[jumps_after][:-1], pd.NA)
-                #),
+                # ),
                 "forcing_bin_membership": forcing_bin_membership[jumps_after],
                 "forcingtime_bin_starttime_sec": forcingtime_bin_starttime_sec,
                 "forcingtime_bin_duration_sec": np.hstack(
-                    #(np.nan, forcingtime_bin_duration_sec)
+                    # (np.nan, forcingtime_bin_duration_sec)
                     (forcingtime_bin_duration_sec, np.nan)
                 ),
             }
             self.forcingtime_bins[forcing_name] = pd.DataFrame(forcingtime_bins)
             self.forcingtime_bins[forcing_name]["forcing_bin_membership"] = (
-                self.forcingtime_bins[forcing_name][
-                    "forcing_bin_membership"
-                ].astype("category")
+                self.forcingtime_bins[forcing_name]["forcing_bin_membership"].astype(
+                    "category"
+                )
             )
 
-    def count_events_in_forcingtime_bins(
-        self, attach_membership_to_cat=False
-    ):
+    def count_events_in_forcingtime_bins(self, attach_membership_to_cat=False):
 
         for forcing_name in self.forcing_bins:
             if (
@@ -565,12 +572,19 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
             # note: we need "- 1" because digitize returns `i` for edge[i-1] < x < edge[i]
             #       but one row of our table gives the start time, duration and eq count of a
             #       given bin
-            forcingtime_bin_eq_membership = np.digitize(
-                self.catalog["t_eq_s"].values,
-                self.forcingtime_bins[forcing_name]["forcingtime_bin_starttime_sec"],
-            ) - 1 
+            forcingtime_bin_eq_membership = (
+                np.digitize(
+                    self.catalog["t_eq_s"].values,
+                    self.forcingtime_bins[forcing_name][
+                        "forcingtime_bin_starttime_sec"
+                    ],
+                )
+                - 1
+            )
             if attach_membership_to_cat:
-                self.catalog[f"membership_{forcing_name}"] = forcingtime_bin_eq_membership
+                self.catalog[f"membership_{forcing_name}"] = (
+                    forcingtime_bin_eq_membership
+                )
             forcingtime_bin_values, forcingtime_bin_counts = np.unique(
                 forcingtime_bin_eq_membership, return_counts=True
             )
@@ -580,18 +594,17 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
             self.forcingtime_bins[forcing_name].loc[
                 forcingtime_bin_values, "forcingtime_bin_count"
             ] = forcingtime_bin_counts
-            #self.forcingtime_bins[forcing_name].fillna(
+            # self.forcingtime_bins[forcing_name].fillna(
             #    {"forcingtime_bin_count": 0}, inplace=True
-            #)
+            # )
 
             # first row is just here to indicate beginning of first forcingtime bin,
             # but because each row gives stats for bin to the left,
             # the first row has no stat by construction
-            #self.forcingtime_bins[forcing_name].loc[0, "forcingtime_bin_count"] = pd.NA
+            # self.forcingtime_bins[forcing_name].loc[0, "forcingtime_bin_count"] = pd.NA
             self.forcingtime_bins[forcing_name].loc[
-                    self.forcingtime_bins[forcing_name].index[-1],
-                    "forcingtime_bin_count"
-                    ] = pd.NA
+                self.forcingtime_bins[forcing_name].index[-1], "forcingtime_bin_count"
+            ] = pd.NA
 
     def detect_catalog_gaps(self, event_count_bin_size="1D"):
         """ """
@@ -686,10 +699,7 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
         ]
         subforcingtime_bins = self.forcingtime_bins[forcing_name]
         subforcingtime_bins = subforcingtime_bins[
-            (
-                subforcingtime_bins["forcingtime_bin_starttime_sec"]
-                > t_start.timestamp()
-            )
+            (subforcingtime_bins["forcingtime_bin_starttime_sec"] > t_start.timestamp())
             & (
                 subforcingtime_bins["forcingtime_bin_starttime_sec"]
                 <= t_end.timestamp()
@@ -920,7 +930,6 @@ class ShuffledModulationmeter(Modulationmeter):
             {"t_eq_s": t_eq_s, "origin_time": pd.to_datetime(t_eq_s, unit="s")}
         )
         self.random_catalog.sort_values("t_eq_s", inplace=True)
-
 
     def _block_shuffle_catalog(self, num_events_per_block=100):
         """ """
