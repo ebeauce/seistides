@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 
 from functools import partial
 from scipy.signal import wiener
+from scipy.linalg import svd
 
 try:
     from scipy.stats import median_absolute_deviation as scimad
@@ -14,6 +15,7 @@ except ImportError:
 from tqdm import tqdm
 
 from time import time as give_time
+
 
 def estimate_rate_forcingtime_bins(
     cat,
@@ -24,6 +26,9 @@ def estimate_rate_forcingtime_bins(
     bin_extension=0,
     cyclic_bins=False,
 ):
+    """
+    cat is here just for API consistency
+    """
     num_bins = len(forcing_bin_edges) - 1
 
     # initialize output arrays
@@ -38,7 +43,7 @@ def estimate_rate_forcingtime_bins(
     forcingtime_bin_duration_sec = forcingtime_bins[
         "forcingtime_bin_duration_sec"
     ].values
-        
+
     for i in range(num_bins):
         if cyclic_bins:
             bin_edge_indexes = (
@@ -53,12 +58,12 @@ def estimate_rate_forcingtime_bins(
             )
 
         selected_forcingtime_bin_indexes = np.where(
-                forcingtime_bins["forcing_bin_membership"].isin(bin_edge_indexes).values
-                )[0]
+            forcingtime_bins["forcing_bin_membership"].isin(bin_edge_indexes).values
+        )[0]
 
-        #selected_forcingtime_bin_indexes = np.where(
+        # selected_forcingtime_bin_indexes = np.where(
         #    np.isin(forcingtime_bins["forcing_bin_membership"], bin_edge_indexes)
-        #)[0]
+        # )[0]
 
         if num_std_cutoff > 0.0:
             non_zero = forcingtime_bin_count[selected_forcingtime_bin_indexes] > 0.0
@@ -72,7 +77,7 @@ def estimate_rate_forcingtime_bins(
                 anomalous = r_ > mean_ + num_std_cutoff * std_
             else:
                 anomalous = np.zeros(len(selected_forcingtime_bin_indexes), dtype=bool)
-            #if np.sum(anomalous) > 0:
+            # if np.sum(anomalous) > 0:
             #    print(
             #        f"mean={mean_:.2e}, std={std_:.2e}, anomalous: ",
             #        r_[anomalous],
@@ -278,11 +283,12 @@ def composite_rate_estimate(
     downsample=0,
     num_bootstrap_for_errors=100,
     aggregate="median",
-    wiener_filter=None,
+    aggregate_kwargs={},
     min_num_events_in_short_window=10,
     min_fraction_of_valid_windows=0.50,
     keep_short_windows=False,
-    aggregate_kwargs={},
+    wiener_filtering_kwargs=None,
+    svd_filtering_kwargs=None,
     progress=False,
 ):
     """Count number of earthquakes in phase bins with bootstrapping analysis.
@@ -367,6 +373,7 @@ def composite_rate_estimate(
     #   in the `num_short_windows` windows.
     # ----------------------------------------------
     disable = False if progress else True
+    window_times = []
     for n in tqdm(
         range(num_short_windows), desc="Computing in sub-windows", disable=disable
     ):
@@ -385,6 +392,7 @@ def composite_rate_estimate(
                 forcing_bin_edges,
             )
         )
+        window_times.append(t_end)
 
         if window_type == "backward":
             t_end -= short_window_shift
@@ -413,6 +421,9 @@ def composite_rate_estimate(
             f"required {min_num_valid_short_windows})"
         )
         return
+
+    if keep_short_windows:
+        seismicity_vs_forcing["window_times"] = np.asarray(window_times)[valid_window]
 
     if aggregate == "weighted_mean":
         # define weights proportionally to bin_duration, because bin_duration
@@ -445,7 +456,10 @@ def composite_rate_estimate(
             axis=-1,
         )
 
-        if wiener_filter is not None:
+        if svd_filtering_kwargs is not None:
+            all_windows = svd_filtering(all_windows, **svd_filtering_kwargs)
+
+        if wiener_filtering_kwargs is not None:
             win_indexes = np.arange(all_windows.shape[1])
             np.random.shuffle(win_indexes)
             # robust estimation of noise with MAD
@@ -459,6 +473,7 @@ def composite_rate_estimate(
 
             noise_power = np.median(mad_across_windows) ** 2
 
+            wiener_filter = wiener_filtering_kwargs.get("mysize", [1, 1])
             half_wiener_win = (
                 wiener_filter[0] // 2 + wiener_filter[0] % 2,
                 wiener_filter[1] // 2 + wiener_filter[1] % 2,
@@ -472,7 +487,7 @@ def composite_rate_estimate(
                 mode="reflect",
             )
             all_windows = wiener(
-                _padded, mysize=wiener_filter, noise=noise_power
+                _padded, noise=noise_power, **wiener_filtering_kwargs
             )  # [half_wiener_win:-half_wiener_win, :]
             if half_wiener_win[0] > 0:
                 all_windows = all_windows[half_wiener_win[0] : -half_wiener_win[0], :]
@@ -1376,7 +1391,7 @@ def get_singular_vector2(x, singular_value_index=0):
         return 1.0 + np.mean(Ut[0, :] * S[0]) * singular_vector0
 
 
-def get_singular_vector3(x, reconstruction_factor=0.66):
+def _svd_w_robust_ordering(x):
     """
     Parameters
     ----------
@@ -1385,17 +1400,45 @@ def get_singular_vector3(x, reconstruction_factor=0.66):
     """
     from scipy.linalg import svd
 
-    V, S, Ut = svd(x - 1.0, full_matrices=False)
+    V, S, Ut = svd(x, full_matrices=False)
 
     coefficients = np.median(Ut * S[:, None], axis=1)
-
     weights = np.abs(coefficients)
     weights /= weights.sum()
+    ordered_ind = np.argsort(weights)[::-1]
+
+    return (V[:, ordered_ind], S[ordered_ind], Ut[ordered_ind, :], weights[ordered_ind])
+
+
+def svd_filtering(x, reconstruction_factor=0.66):
+    """
+    Parameters
+    ----------
+    x : numpy.ndarray
+        (num_bins, num_windows) ndarray.
+    """
+    V, S, Ut, weights = _svd_w_robust_ordering(x - 1.0)
 
     first_above_threshold = np.where(np.cumsum(weights) >= reconstruction_factor)[0][0]
     indexes = np.arange(first_above_threshold + 1)
 
-    return 1.0 + np.sum(coefficients[None, indexes] * V[:, indexes], axis=1)
+    return 1.0 + V[:, indexes] @ np.diag(S[indexes]) @ Ut[indexes, :]
+
+
+def get_singular_vector3(x, reconstruction_factor=0.66):
+    """
+    Parameters
+    ----------
+    x : numpy.ndarray
+        (num_bins, num_windows) ndarray.
+    """
+    V, S, Ut, weights = _svd_w_robust_ordering(x - 1.0)
+
+    first_above_threshold = np.where(np.cumsum(weights) >= reconstruction_factor)[0][0]
+    indexes = np.arange(first_above_threshold + 1)
+
+    coefficients = np.median(Ut[indexes, :] * S[indexes, None], axis=1)
+    return 1.0 + np.sum(coefficients[None, :] * V[:, indexes], axis=1)
 
 
 def get_singular_vector_stochastic(x, max_singular_values=3):
@@ -1405,21 +1448,19 @@ def get_singular_vector_stochastic(x, max_singular_values=3):
     x : numpy.ndarray
         (num_bins, num_windows) ndarray.
     """
-    from scipy.linalg import svd
-
-    V, S, Ut = svd(x - 1.0, full_matrices=False)
-
+    V, S, Ut, weights = _svd_w_robust_ordering(x - 1.0)
     num_singular_values = min(max_singular_values, len(S))
 
     coefficients = np.median(
         Ut[:num_singular_values, :] * S[:num_singular_values, None], axis=1
     )
-
-    weights = np.abs(coefficients)
-    weights /= weights.sum()
+    weights = weights[:num_singular_values]
 
     singular_vector_index = np.random.choice(
-        np.arange(len(weights)), p=weights, size=len(weights), replace=False
+        np.arange(num_singular_values),
+        p=weights,
+        size=num_singular_values,
+        replace=False,
     )
 
     return 1.0 + np.sum(
@@ -1437,19 +1478,155 @@ def compute_AIC(residuals, num_params):
         + 2 * num_params
     )
 
+
 def robust_instantaneous_phase(x, degree=True):
     """Instantaneous phase from  E. Poggiagliolmi , A. Vesnaver, GJI, 2014.
 
     "Instantaneous phase and frequency derived without user-defined parameters"
     """
     from scipy.signal import hilbert
+
     x_a = hilbert(x)
     x_a = x_a / np.abs(x_a)
     inst_freq = np.conj(x_a)[1:] * np.diff(x_a) * -1j
     inst_phase = np.cumsum(np.real(inst_freq).astype("float64"))
     # shift and wrap phase
-    inst_phase = (inst_phase + np.pi) % (2. * np.pi) - np.pi
+    inst_phase = (inst_phase + np.pi) % (2.0 * np.pi) - np.pi
     if degree:
         return np.rad2deg(inst_phase)
     else:
         return inst_phase
+
+
+#def point_in_any_interval(point, intervals):
+#    try:
+#        intervals.get_loc(point)
+#        return True
+#    except KeyError:
+#        return False
+#
+#
+#def compute_phase(forcing, time):
+#    """ """
+#    from scipy.signal import find_peaks
+#
+#    maxima = find_peaks(forcing, height=0.01, distance=10)[0]
+#    minima = find_peaks(-forcing, height=0.01, distance=10)[0]
+#    extrema = np.sort(np.concatenate((maxima, minima)))
+#    # find the indices of the extrema where the forcing is decreasing
+#    dec_left = extrema[np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] < 0)[0]]
+#    dec_right = extrema[
+#        np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] < 0)[0] + 1
+#    ]
+#    # find the indices of the extrema where the forcing is increasing
+#    inc_left = extrema[np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] > 0)[0]]
+#    inc_right = extrema[
+#        np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] > 0)[0] + 1
+#    ]
+#    # define the intervals where the forcing is increasing and decreasing
+#    interval_dec = pd.IntervalIndex(
+#        pd.arrays.IntervalArray.from_arrays(
+#            time[dec_left], time[dec_right], closed="left"
+#        )
+#    )
+#    interval_inc = pd.IntervalIndex(
+#        pd.arrays.IntervalArray.from_arrays(
+#            time[inc_left], time[inc_right], closed="left"
+#        )
+#    )
+#    # find where the forcing is increasing or decreasing
+#    #time = pd.Series(time)
+#    dec = interval_dec.contains(time[:, None]).any(axis=1)
+#    inc = interval_inc.contains(time[:, None]).any(axis=1)
+#    #dec = time.apply(lambda x: point_in_any_interval(x, interval_dec))
+#    #inc = time.apply(lambda x: point_in_any_interval(x, interval_inc))
+#    # compute the phase for each interval
+#    phase = -1000.0 * np.ones(len(time), dtype=np.float32)
+#
+#    ref_time = time[extrema]
+#    ref_phase = np.zeros(len(extrema))
+#    ref_phase[np.isin(extrema, maxima)] = 0.0
+#    # first, compute phase in decreasing intervals
+#    ref_phase[np.isin(extrema, minima)] = 180.0
+#    # phase[dec] = 180. * (time[dec] - ref_time[dec_left]) / (ref_time[dec_right] - ref_time[dec_left])
+#    phase[dec] = np.interp(time[dec], ref_time, ref_phase)
+#    # then, compute phase in increasing intervals
+#    ref_phase[np.isin(extrema, minima)] = -180.0
+#    phase[inc] = np.interp(time[inc], ref_time, ref_phase)
+#
+#    phase[phase == -1000.0] = np.nan
+#    return phase
+
+#def compute_phase(forcing, time):
+#    from scipy.signal import find_peaks
+#    maxima = find_peaks(forcing, height=0.01, distance=10)[0]
+#    minima = find_peaks(-forcing, height=0.01, distance=10)[0]
+#    extrema = np.sort(np.concatenate((maxima, minima)))
+#    # find the indices of the extrema where the forcing is decreasing
+#    dec_left = extrema[np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] < 0)[0]]
+#    dec_right = extrema[np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] < 0)[0] + 1]
+#    # find the indices of the extrema where the forcing is increasing
+#    inc_left = extrema[np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] > 0)[0]]
+#    inc_right = extrema[np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] > 0)[0] + 1]
+#
+#    # compute the phase for each interval
+#    phase = -1000. * np.ones(len(time), dtype=np.float32)
+#
+#    ref_time = time[extrema]
+#    ref_phase = np.zeros(len(extrema))
+#    ref_phase[np.isin(extrema, maxima)] = 0.
+#    # first, compute phase in decreasing intervals
+#    ref_phase[np.isin(extrema, minima)] = 180.
+#    dec = np.zeros(len(time), dtype=bool)
+#    for i in tqdm(range(len(dec_left)), desc="Decreascing intervals"):
+#        #dec = dec | ((time >= time[dec_left[i]]) & (time < time[dec_right[i]]))
+#        dec = np.logical_or(dec, ((time >= time[dec_left[i]]) & (time < time[dec_right[i]])))
+#    phase[dec] = np.interp(time[dec], ref_time, ref_phase)
+#    
+#    # then, compute phase in increasing intervals
+#    ref_phase[np.isin(extrema, minima)] = -180.
+#    inc = np.zeros(len(time), dtype=bool)
+#    for i in tqdm(range(len(inc_left)), desc="Increasing intervals"):
+#        #inc = inc | ((time >= time[inc_left[i]]) & (time < time[inc_right[i]]))
+#        inc = np.logical_or(inc, ((time >= time[inc_left[i]]) & (time < time[inc_right[i]])))
+#    phase[inc] = np.interp(time[inc], ref_time, ref_phase)
+#
+#    phase[phase == -1000.] = np.nan
+#    return phase
+
+def compute_phase(forcing, time, return_extrema=False, trim_edges=100, **kwargs):
+    from scipy.signal import find_peaks
+
+    kwargs.setdefault("distance", 100)
+    kwargs.setdefault("prominence", 0.25)
+    kwargs.setdefault("width", 5)
+
+    maxima = find_peaks(forcing, **kwargs)[0]
+    maxima = maxima[(maxima > trim_edges) & (maxima < len(forcing) - trim_edges)]
+    minima = find_peaks(-forcing, **kwargs)[0]
+    minima = minima[(minima > trim_edges) & (minima < len(forcing) - trim_edges)]
+    extrema = np.sort(np.concatenate((maxima, minima)))
+
+    ref_phase = np.zeros(len(extrema))
+    if minima[0] < maxima[0]:
+        ref_phase[0] = -180.
+    else:
+        ref_phase[0] = 0.
+    ref_phase[1:] = 180.
+    ref_phase = np.cumsum(ref_phase)
+    ref_time = time[extrema]
+
+    # compute the phase for each interval
+    phase = -1000. * np.ones(len(time), dtype=np.float64)
+
+    time_in = (time >= time[extrema[0]]) & (time <= time[extrema[-1]])
+    phase[time_in] = np.interp(time[time_in], ref_time, ref_phase)
+
+    phase[phase == -1000.] = np.nan
+
+    phase = (phase + 180.) % 360. - 180.
+
+    if return_extrema:
+        return phase, minima, maxima
+    else:
+        return phase
