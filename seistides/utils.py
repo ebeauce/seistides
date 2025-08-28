@@ -119,7 +119,10 @@ def estimate_rate_forcingtime_bins(
             ].sum()
             rate_vs_forcing[i] = count_vs_forcing[i] / duration_vs_forcing[i]
 
-    average_rate = forcingtime_bin_count.sum() / forcingtime_bin_duration_sec.sum()
+    if num_std_cutoff > 0.0:
+        average_rate = rate_vs_forcing.mean()
+    else:
+        average_rate = forcingtime_bin_count.sum() / forcingtime_bin_duration_sec.sum()
     if average_rate == 0.0:
         average_rate = 1.0
 
@@ -1039,7 +1042,7 @@ def load_tidal_stress(
     tidal_stress_path,
     fields=["shear_stress", "normal_stress", "coulomb_stress"],
     rate=True,
-    t_end="2019-07-04",
+    t_end=None,
     mu=None,
 ):
     """ """
@@ -1070,13 +1073,12 @@ def load_tidal_stress(
     )
     tvec_tide = np.arange(0, n_samples) * delta + tref
 
-    # # limit time series to period spanned by seismicity
-    selection = tvec_tide <= pd.Timestamp(t_end).timestamp()
-    for field in tidal_stress:
-        tidal_stress[field] = tidal_stress[field][selection]
-
-    tvec_tide = tvec_tide[selection]
-    time = time[selection]
+    if t_end is not None:
+        selection = tvec_tide <= pd.Timestamp(t_end).timestamp()
+        for field in tidal_stress:
+            tidal_stress[field] = tidal_stress[field][selection]
+        tvec_tide = tvec_tide[selection]
+        time = time[selection]
 
     if rate:
         # compute stressing rates
