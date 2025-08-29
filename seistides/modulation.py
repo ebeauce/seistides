@@ -200,6 +200,8 @@ class Modulationmeter(ABC):
             _mod = self.model[forcing_name][t][model_name]
             performance_metrics["delta_aic"].append(_mod["delta_aic"])
             performance_metrics["rms_residual"].append(_mod["rms_residual"])
+        for param in performance_metrics:
+            performance_metrics[param] = np.asarray(performance_metrics[param])
         return time, performance_metrics
 
     def get_obs_vs_forcing_vs_time(self, forcing_name, obs_name):
