@@ -1042,6 +1042,7 @@ def load_tidal_stress(
     tidal_stress_path,
     fields=["shear_stress", "normal_stress", "coulomb_stress"],
     rate=True,
+    t_start=None,
     t_end=None,
     mu=None,
 ):
@@ -1075,6 +1076,12 @@ def load_tidal_stress(
 
     if t_end is not None:
         selection = tvec_tide <= pd.Timestamp(t_end).timestamp()
+        for field in tidal_stress:
+            tidal_stress[field] = tidal_stress[field][selection]
+        tvec_tide = tvec_tide[selection]
+        time = time[selection]
+    if t_start is not None:
+        selection = tvec_tide >= pd.Timestamp(t_start).timestamp()
         for field in tidal_stress:
             tidal_stress[field] = tidal_stress[field][selection]
         tvec_tide = tvec_tide[selection]
