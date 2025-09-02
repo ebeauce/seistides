@@ -125,6 +125,8 @@ def estimate_rate_forcingtime_bins(
         average_rate = forcingtime_bin_count.sum() / forcingtime_bin_duration_sec.sum()
     if average_rate == 0.0:
         average_rate = 1.0
+    #average_rate = np.median(rate_vs_forcing)
+    #average_rate = rate_vs_forcing.mean()
 
     output = {
         "relative_rate": rate_vs_forcing / average_rate,
@@ -346,17 +348,21 @@ def composite_rate_estimate(
     if aggregate == "median":
         # operator = partial(np.ma.median, axis=-1)
         operator = partial(np.median, axis=-1, **aggregate_kwargs)
+        err_operator = partial(scimad, axis=-1)
         pulling_operator = np.median
     elif aggregate == "mean":
         # operator = partial(np.ma.mean, axis=-1)
         operator = partial(np.mean, axis=-1, **aggregate_kwargs)
         pulling_operator = np.mean
+        err_operator = partial(np.mean, axis=-1)
     elif aggregate == "svd":
         operator = partial(get_singular_vector3, **aggregate_kwargs)
         pulling_operator = np.mean
+        err_operator = partial(np.mean, axis=-1)
     elif aggregate == "svd-stochastic":
         operator = partial(get_singular_vector_stochastic, **aggregate_kwargs)
         pulling_operator = np.mean
+        err_operator = partial(np.mean, axis=-1)
 
     short_window_dur = relativedelta(days=short_window_days)
     short_window_shift = relativedelta(days=int((1.0 - overlap) * short_window_days))
@@ -533,13 +539,19 @@ def composite_rate_estimate(
             seismicity_vs_forcing[f"{field}_err"] = np.mean(
                 all_windows, axis=-1
             ).astype("float32")
-        else:
+        elif num_bootstrap_for_errors > 0:
             (
                 seismicity_vs_forcing[field],
                 seismicity_vs_forcing[f"{field}_err"],
             ) = bootstrap_statistic(
                 all_windows, operator, n_bootstraps=num_bootstrap_for_errors
             )
+        else:
+            seismicity_vs_forcing[field] = operator(all_windows)
+            seismicity_vs_forcing[f"{field}_err"] = err_operator(
+                    all_windows
+                    )
+
 
         # -------------------------
         #       normalize
@@ -1028,7 +1040,6 @@ def loglikelihood_poisson(observed, expectation):
     """ """
     return np.sum(generalized_poisson(observed, expectation))
 
-
 # --------------------------------------------------------------------
 #                       plotting functions
 # --------------------------------------------------------------------
@@ -1058,14 +1069,10 @@ def load_tidal_stress(
             if field in fin:
                 tidal_stress[field] = fin[field][()]
                 n_samples = len(tidal_stress[field])
-    if (
-        ("coulomb_stress" in fields)
-        and ("shear_stress" in fields)
-        and ("normal_stress" in fields)
-    ):
-        tidal_stress["coulomb_stress"] = (
-            tidal_stress["shear_stress"] + mu * tidal_stress["normal_stress"]
-        )
+        if ("coulomb_stress" in fields) and "coulomb_stress" not in fin:
+            tidal_stress["coulomb_stress"] = (
+                    fin["shear_stress"][()] + mu * fin["normal_stress"][()]
+                    )
     tref = np.datetime64(starttime).astype("datetime64[s]").astype("int64")
 
     # calendar time of stress time series

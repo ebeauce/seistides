@@ -92,10 +92,36 @@ def fit_relative_rate_vs_phase_bootstrap(
         # negative log-likelihood
         loss = lambda p, obs: -np.sum(obs * np.log(_model(x_, *p)))
 
-    inverted_alpha = np.zeros(num_bootstraps, dtype=np.float32)
-    inverted_phi = np.zeros(num_bootstraps, dtype=np.float32)
+    inverted_alpha = np.zeros(num_bootstraps + 1, dtype=np.float32)
+    inverted_phi = np.zeros(num_bootstraps + 1, dtype=np.float32)
     if invert_norm:
-        inverted_C = np.zeros(num_bootstraps, dtype=np.float32)
+        inverted_C = np.zeros(num_bootstraps + 1, dtype=np.float32)
+
+    # --------------------------------
+    #      fit original measurement
+    success = False
+    while not success:
+        first_guess = (
+            0.05 * np.random.random(),
+            np.random.uniform(low=-np.pi, high=np.pi),
+        )
+        if invert_norm:
+            first_guess = first_guess + (np.mean(y),)
+        optimization_results = minimize(
+            loss,
+            first_guess,
+            args=(y),
+            bounds=bounds,  # jac="3-point"
+        )
+        success = optimization_results.success
+
+    inverted_alpha[0] = optimization_results.x[0]
+    inverted_phi[0] = optimization_results.x[1]
+    if invert_norm:
+        inverted_C[0] = optimization_results.x[2]
+
+    # --------------------------------
+    #      fit perturbed measurements
     n = 0
     while n < num_bootstraps:
         # generate random sample assuming that each bin [i] of the histogram
@@ -107,10 +133,9 @@ def fit_relative_rate_vs_phase_bootstrap(
         y_b = np.maximum(y_b, 0.0)
         # normalized noisy y
         #y_b = y_b / np.mean(y_b)
-        # first_guess = (0.02 * np.random.random(), 2. * np.pi * np.random.random() - np.pi)
         first_guess = (
             0.05 * np.random.random(),
-            np.pi * np.random.random() - np.pi / 2.0,
+            np.random.uniform(low=-np.pi, high=np.pi),
         )
         if invert_norm:
             first_guess = first_guess + (np.mean(y),)
@@ -120,11 +145,13 @@ def fit_relative_rate_vs_phase_bootstrap(
             args=(y_b),
             bounds=bounds,  # jac="3-point"
         )
-        inverted_alpha[n] = optimization_results.x[0]
-        inverted_phi[n] = optimization_results.x[1]
+        if optimization_results.success == False:
+            continue
+        inverted_alpha[1 + n] = optimization_results.x[0]
+        inverted_phi[1 + n] = optimization_results.x[1]
         if invert_norm:
-            inverted_C[n] = optimization_results.x[2]
-        if inverted_alpha[n] == 0:
+            inverted_C[1 + n] = optimization_results.x[2]
+        if inverted_alpha[1 + n] == 0:
             continue
         n += 1
     inverted_cos_phi = np.cos(inverted_phi)
