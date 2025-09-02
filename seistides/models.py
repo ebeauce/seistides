@@ -103,7 +103,7 @@ def fit_relative_rate_vs_phase_bootstrap(
     while not success:
         first_guess = (
             0.05 * np.random.random(),
-            np.random.uniform(low=-np.pi, high=np.pi),
+            np.random.uniform(low=-0.99 * np.pi, high=0.99 * np.pi),
         )
         if invert_norm:
             first_guess = first_guess + (np.mean(y),)
@@ -133,10 +133,10 @@ def fit_relative_rate_vs_phase_bootstrap(
         y_b = np.maximum(y_b, 0.0)
         # normalized noisy y
         #y_b = y_b / np.mean(y_b)
-        y_b = y_b / np.median(y_b)
+        #y_b = y_b / np.median(y_b)
         first_guess = (
             0.05 * np.random.random(),
-            np.random.uniform(low=-np.pi, high=np.pi),
+            np.random.uniform(low=-0.99*np.pi, high=0.99*np.pi),
         )
         if invert_norm:
             first_guess = first_guess + (np.mean(y),)
