@@ -133,6 +133,7 @@ def fit_relative_rate_vs_phase_bootstrap(
         y_b = np.maximum(y_b, 0.0)
         # normalized noisy y
         #y_b = y_b / np.mean(y_b)
+        y_b = y_b / np.median(y_b)
         first_guess = (
             0.05 * np.random.random(),
             np.random.uniform(low=-np.pi, high=np.pi),

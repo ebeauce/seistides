@@ -554,13 +554,12 @@ def composite_rate_estimate(
 
 
         # -------------------------
-        #       normalize
-        #   (if aggregate='svd' was used, the units are meaningless
+        #     normalize by median
+        # (cos or exp models have median equal to 1 or very close to it)
         if field in {"relative_rate", "observed_rate"}:
-            seismicity_vs_forcing[f"{field}_err"] /= np.ma.mean(
-                seismicity_vs_forcing[field]
-            )
-            seismicity_vs_forcing[field] /= np.ma.mean(seismicity_vs_forcing[field])
+            median = np.ma.median(seismicity_vs_forcing[field])
+            seismicity_vs_forcing[f"{field}_err"] /= median
+            seismicity_vs_forcing[field] /= median
         # ---------------------------------------------------------
     seismicity_vs_forcing["bins"] = forcing_bin_edges
     if downsample > 0:
