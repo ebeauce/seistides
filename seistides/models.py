@@ -60,6 +60,15 @@ def cosine_rate_ratio(x, alpha, phi, C=1.):
 def exp_rate_ratio(x, alpha, phi, C=1.):
     return C * np.exp(alpha * np.cos(x - phi))
 
+def _check_if_at_bound(p, bounds):
+    if len(np.atleast_1d(p)) > 1:
+        at_bound = np.any(
+                [(p[i] == bounds[i][0]) | (p[i] == bounds[i][1]) for i in range(len(p))]
+                )
+    else:
+        at_bound = (p == bounds[0]) | (p == bounds[1])
+    return at_bound
+
 def fit_relative_rate_vs_phase_bootstrap(
     x, y, y_err,
     num_bootstraps=10,
@@ -122,7 +131,7 @@ def fit_relative_rate_vs_phase_bootstrap(
             args=(y),
             bounds=bounds,  # jac="3-point"
         )
-        if optimization_results.x[0] == 0.:
+        if _check_if_at_bound(optimization_results.x, bounds):
             success = False
         else:
             success = optimization_results.success
@@ -160,14 +169,14 @@ def fit_relative_rate_vs_phase_bootstrap(
             args=(y_b),
             bounds=bounds,  # jac="3-point"
         )
+        if _check_if_at_bound(optimization_results.x, bounds):
+            continue
         if optimization_results.success == False:
             continue
         inverted_alpha[1 + n] = optimization_results.x[0]
         inverted_phi[1 + n] = optimization_results.x[1]
         if invert_norm:
             inverted_C[1 + n] = optimization_results.x[2]
-        if inverted_alpha[1 + n] == 0:
-            continue
         n += 1
     inverted_cos_phi = np.cos(inverted_phi)
     inverted_sin_phi = np.sin(inverted_phi)
