@@ -204,7 +204,7 @@ class Modulationmeter(ABC):
             performance_metrics[param] = np.asarray(performance_metrics[param])
         return time, performance_metrics
 
-    def get_obs_vs_forcing_vs_time(self, forcing_name, obs_name):
+    def get_obs_vs_forcing_vs_time(self, forcing_name, obs_name, return_time=True):
         """ """
         time_periods = list(self.modulation[forcing_name].keys())
         time_periods.sort()
@@ -213,7 +213,10 @@ class Modulationmeter(ABC):
             [self.modulation[forcing_name][tp][obs_name] for tp in time_periods], axis=0
         )
 
-        return obs, pd.to_datetime(time_periods)
+        if return_time:
+            return obs, pd.to_datetime(time_periods)
+        else:
+            return obs
 
     def get_model_vs_forcing_vs_time(self, forcing_name, obs_name):
         """ """
