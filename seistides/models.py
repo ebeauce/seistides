@@ -51,14 +51,23 @@ def weighted_linear_regression(X, Y, W=None):
 # ----------------------------------------------------------
 
 def _modulo(x, rad=True):
-    (x + np.pi) % (2. * np.pi) - np.pi
+    x = (x + np.pi) % (2. * np.pi) - np.pi
     return x
 
-def cosine_rate_ratio(x, alpha, phi, C=1.):
-    return C * (1.0 + alpha * np.cos(x - phi))
+def cosine_rate_ratio(x, alpha, phi, C=1., log=False):
+    if log:
+        return np.log(C * (1.0 + alpha * np.cos(x - phi)))
+    else:
+        return C * (1.0 + alpha * np.cos(x - phi))
 
-def exp_rate_ratio(x, alpha, phi, C=1.):
-    return C * np.exp(alpha * np.cos(x - phi))
+def exp_rate_ratio(x, alpha, phi, C=1., log=False):
+    phi = _modulo(phi)
+    if log and C ==1:
+        return alpha * np.cos(x - phi)
+    elif log:
+        return np.log(C) + alpha * np.cos(x - phi)
+    else:
+        return C * np.exp(alpha * np.cos(x - phi))
 
 def _check_if_at_bound(p, bounds):
     if len(np.atleast_1d(p)) > 1:
@@ -68,6 +77,31 @@ def _check_if_at_bound(p, bounds):
     else:
         at_bound = (p == bounds[0]) | (p == bounds[1])
     return at_bound
+
+def _first_guess_rate_vs_phase(r, phase):
+    """Analytical fit of cosine model based on Fourier transform.
+
+    Parameters
+    ----------
+    r : array-like
+        Relative rate of seismicity.
+    phase : array-like
+        Tidal phases in radians.
+
+    Returns
+    -------
+    alpha_0 : float
+        Modulus of the 2pi harmonic component.
+    phi_0 : float
+        Phase of the 2pi harmonic component.
+    """
+    # harmonic component at frequency of 1 tidal cycle
+    dphi = phase[1] - phase[0]
+    R = np.sum((r - 1.) * np.exp(1.j * phase)) * dphi
+    phi_0 = np.angle(R)
+    alpha_0 = np.abs(R) / (2. * np.pi) # because FT is defined in terms of phase
+    return alpha_0, phi_0
+
 
 def fit_relative_rate_vs_phase_bootstrap(
     x, y, y_err,
@@ -105,9 +139,9 @@ def fit_relative_rate_vs_phase_bootstrap(
         loss = lambda p, obs: -np.sum(obs * np.log(_model(x_, *p)))
 
     #if model == "exp":
-    #    y = np.exp(np.log(y) - np.log(y).mean())
+    #    __model = partial(exp_rate_ratio, log=True)
     #    loss = lambda p, obs: np.sum(
-    #            ( (p[0] * np.cos(x_ - p[1])) - np.log(obs) ) ** 2
+    #            ( __model(x_, *p) - np.log(obs) ) ** 2
     #            )
 
     inverted_alpha = np.zeros(num_bootstraps + 1, dtype=np.float32)
@@ -115,20 +149,25 @@ def fit_relative_rate_vs_phase_bootstrap(
     if invert_norm:
         inverted_C = np.zeros(num_bootstraps + 1, dtype=np.float32)
 
+    method = "TNC"
+    #method = "L-BFGS-B"
     # --------------------------------
     #      fit original measurement
     success = False
     while not success:
-        first_guess = (
-            0.01 + 0.05 * np.random.random(),
-            np.random.uniform(low=-0.75 * np.pi, high=0.75 * np.pi),
-        )
+        #first_guess = (
+        #    0.01 + 0.05 * np.random.random(),
+        #    #np.random.uniform(low=-0.75 * np.pi, high=0.75 * np.pi),
+        #    np.random.uniform(low=-np.pi, high=np.pi),
+        #)
+        first_guess = _first_guess_rate_vs_phase(y, x_)
         if invert_norm:
             first_guess = first_guess + (np.mean(y),)
         optimization_results = minimize(
             loss,
             first_guess,
             args=(y),
+            method=method,
             bounds=bounds,  # jac="3-point"
         )
         if _check_if_at_bound(optimization_results.x, bounds):
@@ -167,6 +206,7 @@ def fit_relative_rate_vs_phase_bootstrap(
             loss,
             first_guess,
             args=(y_b),
+            method=method,
             bounds=bounds,  # jac="3-point"
         )
         if _check_if_at_bound(optimization_results.x, bounds):
