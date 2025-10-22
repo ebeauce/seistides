@@ -204,7 +204,7 @@ class Modulationmeter(ABC):
             performance_metrics[param] = np.asarray(performance_metrics[param])
         return time, performance_metrics
 
-    def get_obs_vs_forcing_vs_time(self, forcing_name, obs_name):
+    def get_obs_vs_forcing_vs_time(self, forcing_name, obs_name, return_time=True):
         """ """
         time_periods = list(self.modulation[forcing_name].keys())
         time_periods.sort()
@@ -213,7 +213,10 @@ class Modulationmeter(ABC):
             [self.modulation[forcing_name][tp][obs_name] for tp in time_periods], axis=0
         )
 
-        return obs, pd.to_datetime(time_periods)
+        if return_time:
+            return obs, pd.to_datetime(time_periods)
+        else:
+            return obs
 
     def get_model_vs_forcing_vs_time(self, forcing_name, obs_name):
         """ """
@@ -417,110 +420,84 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 / 1000.0
             )
 
-            # ---------------------------------------------------------------
             if first_order_correction:
-                # define reference gradient for correction
-                # based on the assumption that the dominant period is about 12 hours
-                ref_gradient = bin_range / (12.0 * 3600.0)
-
+                warnings.warn(
+                        "first_order_correction feature is not yet operational!"
+                        )
+                _jumps_after = jumps_after[1:]
+                _jumps_before = _jumps_after - 1
                 if cyclic_bins:
-                    # use complex numbers to elegantly get the smallest angle
-                    # on the unit circle (positive differences are counter clockwise)
-                    _phase_after = self.forcing_bins[forcing_name][
-                        forcing_bin_membership[jumps_after[1:]]
-                    ]
-                    _phase_before = self.forcing_bins[forcing_name][
-                        forcing_bin_membership[jumps_after[1:] - 1]
-                    ]
-                    jump_values = np.rad2deg(
-                        np.angle(np.exp(1j * np.deg2rad(_phase_after - _phase_before)))
-                    )
+                    _forcing = np.unwrap(
+                            self.forcing[forcing_name].astype("float128"), period=360.
+                            )#.values
                 else:
-                    jump_values = (
-                        self.forcing_bins[forcing_name][
-                            forcing_bin_membership[jumps_after[1:]]
-                        ]
-                        - self.forcing_bins[forcing_name][
-                            forcing_bin_membership[jumps_after[1:] - 1]
-                        ]
-                    )
-                jump_values = np.hstack((0.0, jump_values))
-                # calculate gradient for first-order correction of finite sampling precision
-                jumps_before = np.hstack((0, jumps_after[1:] - 1))  # treat first sample
-                if cyclic_bins:
-                    _phase_after = self.forcing[forcing_name].iloc[jumps_after].values
-                    _phase_before = self.forcing[forcing_name].iloc[jumps_before].values
-                    dforcing = np.rad2deg(
-                        np.angle(np.exp(1j * np.deg2rad(_phase_after - _phase_before)))
-                    )
-                else:
-                    dforcing = (
-                        self.forcing[forcing_name].iloc[jumps_after].values
-                        - self.forcing[forcing_name].iloc[jumps_before].values
-                    )
-                gradient = np.hstack((0.0, dforcing[1:] / dt))
-                # print("Gradient:", gradient.max(), gradient.min())
-                target = np.zeros(
-                    len(jumps_before), dtype=self.forcing_bins[forcing_name].dtype
-                )
-                # if jump [j] was positive, then the bin edge before [j] was
-                # forcing_bin_membership[j] - 1 (one bin before [j])
-                target[jump_values > 0.0] = self.forcing_bins[forcing_name][
-                    forcing_bin_membership[jumps_after[jump_values > 0.0]] - 1
-                ]
-                # if jump [j] was negative, then the bin edge before [j] was
-                # forcing_bin_membership[j] (one bin after [j])
-                target[jump_values < 0.0] = self.forcing_bins[forcing_name][
-                    forcing_bin_membership[jumps_after[jump_values < 0.0]]
-                ]
-                print("Did we get the target right?")
-                idx = 345
-                print(
-                    "Sample before:",
-                    self.forcing[forcing_name].iloc[jumps_before].values[idx],
-                )
-                print(
-                    "Sample after:",
-                    self.forcing[forcing_name].iloc[jumps_after].values[idx],
-                )
-                print("Target:", target[idx])
-                if cyclic_bins:
-                    _phase_target = target
-                    _phase_before = self.forcing[forcing_name].iloc[jumps_before].values
-                    difference = np.rad2deg(
-                        np.angle(np.exp(1j * np.deg2rad(_phase_target - _phase_before)))
-                    )
+                    _forcing = self.forcing[forcing_name].values
+                bin_min = self.forcing_bins[forcing_name].min()
+                bin_lower_edge = (
+                        bin_min
+                        + np.floor((_forcing - bin_min) / bin_width) * bin_width
+                        )
+                bin_upper_edge = bin_lower_edge + bin_width
 
-                else:
-                    difference = (
-                        target - self.forcing[forcing_name].iloc[jumps_before].values
-                    )
-                correction = np.hstack((0.0, difference[1:] / gradient[1:]))
-                print(
-                    "Correction:",
-                    np.percentile(correction, 25.0),
-                    np.percentile(correction, 50.0),
-                    np.percentile(correction, 75.0),
-                )
-                # special case for large jumps resulting from discontinuities in forcing time
-                # series
-                discontinuities = np.abs(jump_values) > bin_width
-                correction[discontinuities] = (
-                    self.forcing[forcing_name]
-                    .index[jumps_after[discontinuities]]
-                    .values.astype("datetime64[ms]")
-                    .astype("float64")
-                    / 1000.0
-                    - self.forcing[forcing_name]
-                    .index[jumps_before[discontinuities]]
-                    .values.astype("datetime64[ms]")
-                    .astype("float64")
-                    / 1000.0
-                ) / 2.0
+                dforcing = _forcing[_jumps_after] - _forcing[_jumps_before]
+                #gradient = dforcing / dt
+                transition_times = np.zeros(len(_jumps_before), dtype=np.float64)
+                # positive jumps
+                positive = dforcing > 0.
+                time_to_upper_bin = dt * (
+                        bin_upper_edge[_jumps_before[positive]]
+                        - _forcing[_jumps_before[positive]]
+                        ) / dforcing[positive]
+                transition_times[positive] = (
+                        self.forcing["time_sec"].values[_jumps_before[positive]]
+                        + time_to_upper_bin
+                        #+ np.maximum(0., time_to_upper_bin)
+                        )
+                # negative jumps
+                negative = dforcing < 0.
+                time_to_lower_bin = dt * (
+                        bin_lower_edge[_jumps_before[negative]]
+                        - _forcing[_jumps_before[negative]]
+                        ) / dforcing[negative]
+                transition_times[negative] = (
+                        self.forcing["time_sec"].values[_jumps_before[negative]]
+                        + time_to_lower_bin
+                        #+ np.maximum(0., time_to_lower_bin)
+                        )
+                # if this happens, it means that the numerical precision
+                # has reached its limit when unwrapping the phase
+                transition_times[dforcing == 0.] = (
+                        forcingtime_bin_starttime_sec[1:][dforcing == 0.]
+                        )
+                transition_times = np.hstack(
+                        (forcingtime_bin_starttime_sec[0], transition_times)
+                        )
 
-                # apply correction
-                forcingtime_bin_starttime_sec -= correction
-            # ---------------------------------------------------------------
+                correction = transition_times - forcingtime_bin_starttime_sec
+
+                #diff = np.diff(transition_times)
+                #diff = np.hstack((0., diff))
+                #argprob = diff.argmin()
+                #time_problem = pd.Timestamp(forcingtime_bin_starttime_sec[argprob], unit="s")
+                #print(
+                #        forcing_name,
+                #        diff.min(),
+                #        time_problem,
+                #        pd.Timestamp(transition_times[argprob], unit="s"),
+                #        transition_times[argprob],
+                #        self.forcing.loc[time_problem, forcing_name],
+                #        self.forcing.loc[time_problem, "shear_stress"],
+                #        dforcing[argprob - 1]
+                #        )
+                #print(correction[:20])
+                #print(
+                #        forcingtime_bin_starttime_sec[:10] - forcingtime_bin_starttime_sec[0],
+                #        transition_times[:10] - transition_times[0]
+                #        )
+
+
+                forcingtime_bin_starttime_sec = transition_times
+
 
             forcingtime_bin_duration_sec = (
                 forcingtime_bin_starttime_sec[1:] - forcingtime_bin_starttime_sec[:-1]
