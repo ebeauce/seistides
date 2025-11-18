@@ -78,7 +78,7 @@ def _check_if_at_bound(p, bounds):
         at_bound = (p == bounds[0]) | (p == bounds[1])
     return at_bound
 
-def _first_guess_rate_vs_phase(r, phase):
+def _analytical_cosine_fit(r, phase):
     """Analytical fit of cosine model based on Fourier transform.
 
     Parameters
@@ -149,31 +149,32 @@ def fit_relative_rate_vs_phase_bootstrap(
     if invert_norm:
         inverted_C = np.zeros(num_bootstraps + 1, dtype=np.float32)
 
-    method = "TNC"
-    #method = "L-BFGS-B"
+    #method = "TNC"
+    method = "L-BFGS-B"
     # --------------------------------
     #      fit original measurement
     success = False
+    first_guess = _analytical_cosine_fit(y, x_)
+    #print(first_guess)
     while not success:
-        #first_guess = (
-        #    0.01 + 0.05 * np.random.random(),
-        #    #np.random.uniform(low=-0.75 * np.pi, high=0.75 * np.pi),
-        #    np.random.uniform(low=-np.pi, high=np.pi),
-        #)
-        first_guess = _first_guess_rate_vs_phase(y, x_)
         if invert_norm:
             first_guess = first_guess + (np.mean(y),)
         optimization_results = minimize(
             loss,
             first_guess,
             args=(y),
-            method=method,
+            #method=method,
             bounds=bounds,  # jac="3-point"
         )
         if _check_if_at_bound(optimization_results.x, bounds):
             success = False
         else:
             success = optimization_results.success
+        first_guess = (
+            0.01 + 0.05 * np.random.random(),
+            #np.random.uniform(low=-0.75 * np.pi, high=0.75 * np.pi),
+            np.random.uniform(low=-np.pi, high=np.pi),
+        )
 
     inverted_alpha[0] = optimization_results.x[0]
     inverted_phi[0] = optimization_results.x[1]
@@ -206,7 +207,7 @@ def fit_relative_rate_vs_phase_bootstrap(
             loss,
             first_guess,
             args=(y_b),
-            method=method,
+            #method=method,
             bounds=bounds,  # jac="3-point"
         )
         if _check_if_at_bound(optimization_results.x, bounds):
