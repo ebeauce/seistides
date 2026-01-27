@@ -32,7 +32,7 @@ class Modulationmeter(ABC):
         if downsample is None:
             downsample = 0
         self.downsample = downsample
-        self.catalog = catalog
+        self.set_catalog(catalog)
         self.forcing = forcing
         self.forcing_bins = forcing_bins
         self.window_type = window_type
@@ -289,7 +289,18 @@ class Modulationmeter(ABC):
         )
 
     def set_catalog(self, catalog):
-        self.catalog = catalog
+        if catalog is None:
+            self.catalog = None
+        else:
+            self.catalog = catalog
+            self.catalog["origin_time"] = pd.to_datetime(self.catalog["origin_time"])
+            if "t_eq_s" not in self.catalog:
+                self.catalog["t_eq_s"] = (
+                    pd.to_datetime(self.catalog["origin_time"])
+                    .values.astype("datetime64[ms]")
+                    .astype("float64")
+                    / 1000.0
+                )
 
     def set_forcing(self, forcing):
         self.forcing = forcing
@@ -421,65 +432,70 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
             )
 
             if first_order_correction:
-                warnings.warn(
-                        "first_order_correction feature is not yet operational!"
-                        )
+                warnings.warn("first_order_correction feature is not yet operational!")
                 _jumps_after = jumps_after[1:]
                 _jumps_before = _jumps_after - 1
                 if cyclic_bins:
                     _forcing = np.unwrap(
-                            self.forcing[forcing_name].astype("float128"), period=360.
-                            )#.values
+                        self.forcing[forcing_name].astype("float128"), period=360.0
+                    )  # .values
                 else:
                     _forcing = self.forcing[forcing_name].values
                 bin_min = self.forcing_bins[forcing_name].min()
                 bin_lower_edge = (
-                        bin_min
-                        + np.floor((_forcing - bin_min) / bin_width) * bin_width
-                        )
+                    bin_min + np.floor((_forcing - bin_min) / bin_width) * bin_width
+                )
                 bin_upper_edge = bin_lower_edge + bin_width
 
                 dforcing = _forcing[_jumps_after] - _forcing[_jumps_before]
-                #gradient = dforcing / dt
+                # gradient = dforcing / dt
                 transition_times = np.zeros(len(_jumps_before), dtype=np.float64)
                 # positive jumps
-                positive = dforcing > 0.
-                time_to_upper_bin = dt * (
+                positive = dforcing > 0.0
+                time_to_upper_bin = (
+                    dt
+                    * (
                         bin_upper_edge[_jumps_before[positive]]
                         - _forcing[_jumps_before[positive]]
-                        ) / dforcing[positive]
+                    )
+                    / dforcing[positive]
+                )
                 transition_times[positive] = (
-                        self.forcing["time_sec"].values[_jumps_before[positive]]
-                        + time_to_upper_bin
-                        #+ np.maximum(0., time_to_upper_bin)
-                        )
+                    self.forcing["time_sec"].values[_jumps_before[positive]]
+                    + time_to_upper_bin
+                    # + np.maximum(0., time_to_upper_bin)
+                )
                 # negative jumps
-                negative = dforcing < 0.
-                time_to_lower_bin = dt * (
+                negative = dforcing < 0.0
+                time_to_lower_bin = (
+                    dt
+                    * (
                         bin_lower_edge[_jumps_before[negative]]
                         - _forcing[_jumps_before[negative]]
-                        ) / dforcing[negative]
+                    )
+                    / dforcing[negative]
+                )
                 transition_times[negative] = (
-                        self.forcing["time_sec"].values[_jumps_before[negative]]
-                        + time_to_lower_bin
-                        #+ np.maximum(0., time_to_lower_bin)
-                        )
+                    self.forcing["time_sec"].values[_jumps_before[negative]]
+                    + time_to_lower_bin
+                    # + np.maximum(0., time_to_lower_bin)
+                )
                 # if this happens, it means that the numerical precision
                 # has reached its limit when unwrapping the phase
-                transition_times[dforcing == 0.] = (
-                        forcingtime_bin_starttime_sec[1:][dforcing == 0.]
-                        )
+                transition_times[dforcing == 0.0] = forcingtime_bin_starttime_sec[1:][
+                    dforcing == 0.0
+                ]
                 transition_times = np.hstack(
-                        (forcingtime_bin_starttime_sec[0], transition_times)
-                        )
+                    (forcingtime_bin_starttime_sec[0], transition_times)
+                )
 
                 correction = transition_times - forcingtime_bin_starttime_sec
 
-                #diff = np.diff(transition_times)
-                #diff = np.hstack((0., diff))
-                #argprob = diff.argmin()
-                #time_problem = pd.Timestamp(forcingtime_bin_starttime_sec[argprob], unit="s")
-                #print(
+                # diff = np.diff(transition_times)
+                # diff = np.hstack((0., diff))
+                # argprob = diff.argmin()
+                # time_problem = pd.Timestamp(forcingtime_bin_starttime_sec[argprob], unit="s")
+                # print(
                 #        forcing_name,
                 #        diff.min(),
                 #        time_problem,
@@ -489,15 +505,13 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 #        self.forcing.loc[time_problem, "shear_stress"],
                 #        dforcing[argprob - 1]
                 #        )
-                #print(correction[:20])
-                #print(
+                # print(correction[:20])
+                # print(
                 #        forcingtime_bin_starttime_sec[:10] - forcingtime_bin_starttime_sec[0],
                 #        transition_times[:10] - transition_times[0]
                 #        )
 
-
                 forcingtime_bin_starttime_sec = transition_times
-
 
             forcingtime_bin_duration_sec = (
                 forcingtime_bin_starttime_sec[1:] - forcingtime_bin_starttime_sec[:-1]
