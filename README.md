@@ -5,6 +5,10 @@ Use `seistides` to measure and characterize the modulation of the rate of seismi
 tidal stresses following the methodology described in Beaucé et al. (2023, in review). Check
 out examples in `seistides/notebooks`.
 
+<p align="center">
+  <img src="./data/seismic_response_example.png" width="33%" alt="Relative rate of seismicity"/>
+</p>
+
 Former versions
 ---------------
 
@@ -19,8 +23,4 @@ References
   and increase in tidal modulation of seismicity in the Ridgecrest fault zone before and after
 the 2019 magnitude 7.1 earthquake. In review at Bulletin of Seismological Society of America.
 
-
-<p align="center">
-  <img src="./data/seismic_response_example.png" alt="Relative rate of seismicity"/>
-</p>
 
