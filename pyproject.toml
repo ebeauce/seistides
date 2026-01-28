@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "seistides"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Analysis of tidal modulation of seismicity"
 authors = [
     { name = "Eric Beauce" }
@@ -24,8 +24,12 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/ebeauce/seistides"
 
+[tool.setuptools.packages.find]
+include = ["seistides*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "seistides.__version__" }
+
 [tool.setuptools]
 include-package-data = true
 zip-safe = false
-py-modules = ["seistides"]
-
