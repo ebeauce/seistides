@@ -6,7 +6,7 @@ tidal stresses following the methodology described in Beaucé et al. (2023, in r
 out examples in `seistides/notebooks`.
 
 <p align="center">
-  <img src="./data/seismic_response_example.png" width="33%" alt="Relative rate of seismicity"/>
+  <img src="./data/seismic_response_example.png" width="66%" alt="Relative rate of seismicity"/>
 </p>
 
 Former versions
