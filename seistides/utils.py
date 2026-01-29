@@ -1,0 +1,1363 @@
+import h5py as h5
+import numpy as np
+import pandas as pd
+
+import matplotlib.pyplot as plt
+
+from functools import partial
+from scipy.signal import wiener
+from scipy.linalg import svd
+
+try:
+    from scipy.stats import median_absolute_deviation as scimad
+except ImportError:
+    from scipy.stats import median_abs_deviation as scimad
+from tqdm import tqdm
+
+from time import time as give_time
+
+
+def estimate_rate_forcingtime_bins(
+    cat,
+    forcingtime_bins,
+    forcing_bin_edges,
+    num_bootstraps=100,
+    num_std_cutoff=0.0,
+    bin_extension=0,
+    cyclic_bins=False,
+):
+    """
+    cat is here just for API consistency
+    """
+    num_bins = len(forcing_bin_edges) - 1
+
+    # initialize output arrays
+    rate_vs_forcing = np.zeros(num_bins)
+    rate_vs_forcing_std = np.zeros(num_bins)
+    count_vs_forcing = np.zeros(num_bins)
+    count_vs_forcing_std = np.zeros(num_bins)
+    duration_vs_forcing = np.zeros(num_bins)
+    duration_vs_forcing_std = np.zeros(num_bins)
+    # fetch input numpy arrays from pandas DataFrame
+    forcingtime_bin_count = forcingtime_bins["forcingtime_bin_count"].values
+    forcingtime_bin_duration_sec = forcingtime_bins[
+        "forcingtime_bin_duration_sec"
+    ].values
+
+    for i in range(num_bins):
+        if cyclic_bins:
+            bin_edge_indexes = (
+                np.arange(i - bin_extension, i + bin_extension + 1) % num_bins
+            ) + 1
+        else:
+            bin_edge_indexes = (
+                np.arange(
+                    max(0, i - bin_extension), min(num_bins, i + bin_extension + 1)
+                )
+                + 1
+            )
+
+        selected_forcingtime_bin_indexes = np.where(
+            forcingtime_bins["forcing_bin_membership"].isin(bin_edge_indexes).values
+        )[0]
+
+        # selected_forcingtime_bin_indexes = np.where(
+        #    np.isin(forcingtime_bins["forcing_bin_membership"], bin_edge_indexes)
+        # )[0]
+
+        if num_std_cutoff > 0.0:
+            non_zero = forcingtime_bin_count[selected_forcingtime_bin_indexes] > 0.0
+            if np.sum(non_zero) > 2:
+                r_ = (
+                    forcingtime_bin_count[selected_forcingtime_bin_indexes]
+                    / forcingtime_bin_duration_sec[selected_forcingtime_bin_indexes]
+                )
+                mean_ = r_[non_zero].mean()
+                std_ = r_[non_zero].std()
+                anomalous = r_ > mean_ + num_std_cutoff * std_
+            else:
+                anomalous = np.zeros(len(selected_forcingtime_bin_indexes), dtype=bool)
+            # if np.sum(anomalous) > 0:
+            #    print(
+            #        f"mean={mean_:.2e}, std={std_:.2e}, anomalous: ",
+            #        r_[anomalous],
+            #    )
+
+            selected_forcingtime_bin_indexes = selected_forcingtime_bin_indexes[
+                ~anomalous
+            ]
+        if num_bootstraps > 0:
+            rates = np.zeros(num_bootstraps)
+            counts = np.zeros(num_bootstraps)
+            durations = np.zeros(num_bootstraps)
+            for j in range(num_bootstraps):
+                indexes_b = np.random.choice(
+                    selected_forcingtime_bin_indexes,
+                    len(selected_forcingtime_bin_indexes),
+                    replace=True,
+                )
+                counts[j] = forcingtime_bin_count[indexes_b].sum()
+                durations[j] = forcingtime_bin_duration_sec[indexes_b].sum()
+                rates[j] = counts[j] / durations[j]
+            rate_vs_forcing[i] = np.mean(rates)
+            if np.isnan(rate_vs_forcing[i]):
+                print("!!!!!!!!!!!!!!! NAN !!!!!!!!!!!!!!!")
+                print(rates)
+                print("!!!!!!!!!!!!!!! NAN !!!!!!!!!!!!!!!")
+
+            rate_vs_forcing_std[i] = np.std(rates)
+            count_vs_forcing[i] = np.median(counts)
+            count_vs_forcing_std[i] = np.std(counts)
+            duration_vs_forcing[i] = np.median(durations)
+            duration_vs_forcing_std[i] = np.std(durations)
+        else:
+            count_vs_forcing[i] = forcingtime_bin_count[
+                selected_forcingtime_bin_indexes
+            ].sum()
+            duration_vs_forcing[i] = forcingtime_bin_duration_sec[
+                selected_forcingtime_bin_indexes
+            ].sum()
+            rate_vs_forcing[i] = count_vs_forcing[i] / duration_vs_forcing[i]
+
+    if num_std_cutoff > 0.0:
+        average_rate = rate_vs_forcing.mean()
+    else:
+        average_rate = forcingtime_bin_count.sum() / forcingtime_bin_duration_sec.sum()
+    if average_rate == 0.0:
+        average_rate = 1.0
+    #average_rate = np.median(rate_vs_forcing)
+    #average_rate = rate_vs_forcing.mean()
+
+    output = {
+        "relative_rate": rate_vs_forcing / average_rate,
+        "relative_rate_err": rate_vs_forcing_std / average_rate,
+        "observed_rate": rate_vs_forcing,
+        "observed_rate_err": rate_vs_forcing_std,
+        "event_count": count_vs_forcing,
+        "event_count_err": count_vs_forcing_std,
+        "bin_duration": duration_vs_forcing,
+        "bin_duration_err": duration_vs_forcing_std,
+    }
+    return output
+
+
+def estimate_rate_forcing_bins(
+    cat,
+    forcing,
+    forcing_bin_edges,
+    clip_relative_rate_above=None,
+    clip_relative_rate_below=None,
+):
+    """Count number of earthquakes in phase bins.
+
+    Parameters
+    -----------
+    cat : `pandas.DataFrame`
+        Earthquake catalog.
+    forcing : `pandas.Series`
+        Tidal forcing time series.
+    forcing_bin_edges : array-like
+        Edges of the forcing bins.
+
+    Returns
+    --------
+    seismicity_vs_phase : dict
+        For each phase component given in 'fields', a dictionary is given
+        with the following attributes:
+        - "event_count": Histogram of instantaneous phase values at earthquake times.
+        - "bins": Bins of the histogram.
+        - "bin_duration": Fraction of the time axis covered by each phase
+                           bin. For example, some phase values are
+                           rare so the associated phase bin covers a small
+                           fraction of the time axis and even in the case of
+                           tide-independent seismicity one expects
+                           significantly less earthquakes in these phase bins.
+        - "observed_rate": "phase_hist" normalized by the total number of
+                           earthquakes.
+    """
+    forcing_at_eq = cat[forcing.name].values
+    # bin the values of tidal phase at earthquake timings
+    (
+        count_vs_forcing,
+        _,
+    ) = np.histogram(
+        forcing_at_eq,
+        bins=forcing_bin_edges,
+    )
+    # estimate the expected number of earthquakes in each bin for random seismicity
+    n_time_samples = len(forcing)
+    tidal_phase_hist, _ = np.histogram(
+        forcing,
+        bins=forcing_bin_edges,
+    )
+    dt_tides = (forcing.index[1] - forcing.index[0]).total_seconds()
+    # hist/n_times = fraction of time occupied by samples with stress values in given bin
+    # (hist/n_times)*ntotal = expected number of events with given stress value if
+    #                         seismicity were to be independent of tidal stress
+    if n_time_samples > 0:
+        bin_duration = tidal_phase_hist * dt_tides
+    else:
+        bin_duration = np.zeros_like(tidal_phase_hist)
+
+    # average rate of seismicity over entire window
+    average_rate = float(len(cat)) / (dt_tides * len(forcing))
+
+    # 0/0 is 0
+    invalid = np.isnan(count_vs_forcing) | np.isinf(count_vs_forcing)
+    # anticipate 0/0
+    zero_by_zero = (count_vs_forcing == 0.0) & (bin_duration == 0.0)
+    # estimate the rate of seismicity vs tidal forcing
+    observed_rate = average_rate * np.ones(len(count_vs_forcing), dtype=np.float32)
+    observed_rate[~zero_by_zero] = (
+        count_vs_forcing[~zero_by_zero] / bin_duration[~zero_by_zero]
+    )
+    observed_rate[invalid] = average_rate
+
+    if np.any(np.isinf(observed_rate)):
+        print("observed rate", observed_rate)
+        print("bin duration", bin_duration)
+        print("event count", count_vs_forcing)
+        print("data", forcing)
+
+    relative_rate = observed_rate / average_rate
+
+    mean = np.mean(relative_rate)
+    if clip_relative_rate_above is not None:
+        if mean != 0.0:
+            clip_relative_rate_above = clip_relative_rate_above / mean
+        relative_rate = np.clip(
+            relative_rate, a_min=0.0, a_max=clip_relative_rate_above
+        )
+    if clip_relative_rate_below is not None:
+        if mean != 0.0:
+            clip_relative_rate_below = clip_relative_rate_below / mean
+        relative_rate = np.clip(
+            relative_rate, a_min=clip_relative_rate_below, a_max=relative_rate.max()
+        )
+
+    ## normalization so that the ratio vector sums up to 1.
+    # norm = np.mean(relative_rate)
+    # if norm != 0.0:
+    #    relative_rate /= norm
+    # relative_rate = relative_rate
+
+    output = {
+        "relative_rate": relative_rate,
+        "observed_rate": observed_rate,
+        "event_count": count_vs_forcing,
+        "bin_duration": bin_duration,
+    }
+    return output
+
+
+def _weighted_mean(x, weights):
+    return np.sum(x * weights, axis=-1)
+
+
+def _jackknife_bias(x, operator, x_all=None):
+    """
+    Parameters
+    ----------
+    x : numpy.ndarray
+        (num_bins, num_windows) ndarray.
+    """
+    pool = np.ones(x.shape[1], dtype=bool)
+    bias = np.zeros(x.shape[0], dtype=x.dtype)
+    for i in range(x.shape[1]):
+        pool[i] = False
+        _x_j = x[:, pool]
+        bias += operator(_x_j)
+        pool[i] = True
+    if x_all is None:
+        x_all = operator(x)
+    bias = float(x.shape[1] - 1) * (bias / float(x.shape[1]) - x_all)
+    return bias
+
+
+def composite_rate_estimate(
+    cat,
+    forcing,
+    forcing_bin_edges,
+    window_time,
+    func,
+    mode="forcing",
+    window_type="backward",
+    short_window_days=3 * 30,
+    num_short_windows=8,
+    overlap=0.0,
+    downsample=0,
+    num_bootstrap_for_errors=100,
+    aggregate="median",
+    aggregate_kwargs={},
+    min_num_events_in_short_window=10,
+    min_fraction_of_valid_windows=0.50,
+    keep_short_windows=False,
+    wiener_filtering_kwargs=None,
+    svd_filtering_kwargs=None,
+    progress=False,
+):
+    """Count number of earthquakes in phase bins with bootstrapping analysis.
+
+    Parameters
+    -----------
+    cat : `pandas.DataFrame`
+        The catalog to analyze
+    forcing : `pandas.Series`
+        Tidal forcing time series.
+    forcing_bin_edges : array-like
+        Edges of the forcing bins,
+    short_window_days : iont, default to 90
+        Size of the short time window, in days.
+    overlap : float, default to 0.
+        Overlap between sliding short time windows.
+    num_short_windows : int, default to 8
+        Number of sliding short windows over which the statistics is computed.
+        The length of the corresponding large window is
+        `num_short_windows*(1 - overlap)*short_window_days + overlap*short_window_days`.
+        The sliding windows start from `t_end`.
+    t_end : string or datetime-like object, default to None
+        Reference time from which the short time windows are sliding backward.
+        If None, take the latest earthquake timing in `cat`.
+    progress : boolean, default to True
+        If True, print the progress bar when iterating over the short time windows.
+    downsample : int, optional
+        If different from 0, the composite rate ratio is downsampled by applying
+        average pooling in bins of `downsample` samples. Users may use many bins
+        at first to accurately estimate the expected ratio and then downsample
+        the observed/expectred ratio to reduce noise. Defaults to 0.
+    num_bootstrap_for_errors : int, optional
+        The error on the composite rate ratio is computed by estimating the
+        composite rate ratio `num_bootstrap_for_errors` times on randomly
+        selected short windows.
+
+    """
+    from dateutil.relativedelta import relativedelta
+
+    assert window_type in {
+        "backward",
+        "forward",
+    }, "window_type should be either of 'backward' or 'forward'"
+    assert aggregate in {
+        "mean",
+        "median",
+        "weighted_mean",
+        "svd",
+        "svd-stochastic",
+    }, "aggregate should be either of 'mean', 'median', 'svd' or 'svd-stochastic'"
+
+    if aggregate == "median":
+        # operator = partial(np.ma.median, axis=-1)
+        operator = partial(np.median, axis=-1, **aggregate_kwargs)
+        err_operator = partial(scimad, axis=-1)
+        pulling_operator = np.median
+    elif aggregate == "mean":
+        # operator = partial(np.ma.mean, axis=-1)
+        operator = partial(np.mean, axis=-1, **aggregate_kwargs)
+        pulling_operator = np.mean
+        err_operator = partial(np.mean, axis=-1)
+    elif aggregate == "svd":
+        operator = partial(get_singular_vector3, **aggregate_kwargs)
+        pulling_operator = np.mean
+        err_operator = partial(np.mean, axis=-1)
+    elif aggregate == "svd-stochastic":
+        operator = partial(get_singular_vector_stochastic, **aggregate_kwargs)
+        pulling_operator = np.mean
+        err_operator = partial(np.mean, axis=-1)
+
+    short_window_dur = relativedelta(days=short_window_days)
+    short_window_shift = relativedelta(days=int((1.0 - overlap) * short_window_days))
+    min_num_valid_short_windows = int(min_fraction_of_valid_windows * num_short_windows)
+    seismicity_vs_forcing_short_win = []
+
+    if window_type == "backward":
+        t_end = window_time
+        t_start = t_end - short_window_dur
+    elif window_type == "forward":
+        t_start = window_time
+        t_end = t_start + short_window_dur
+
+    # ----------------------------------------------
+    #   Estimate the observed and expected rate
+    #   of seismicity as a function of 'forcing_name'
+    #   in the `num_short_windows` windows.
+    # ----------------------------------------------
+    disable = False if progress else True
+    window_times = []
+    for n in tqdm(
+        range(num_short_windows), desc="Computing in sub-windows", disable=disable
+    ):
+        subcat = cat[(cat["origin_time"] > t_start) & (cat["origin_time"] <= t_end)]
+        if mode == "forcing":
+            subforcing = forcing[(forcing.index > t_start) & (forcing.index <= t_end)]
+        elif mode == "forcingtime":
+            subforcing = forcing[
+                (forcing["forcingtime_bin_starttime_sec"] > t_start.timestamp())
+                & (forcing["forcingtime_bin_starttime_sec"] <= t_end.timestamp())
+            ]
+        seismicity_vs_forcing_short_win.append(
+            func(
+                subcat,
+                subforcing,
+                forcing_bin_edges,
+            )
+        )
+        window_times.append(t_end)
+
+        if window_type == "backward":
+            t_end -= short_window_shift
+            t_start -= short_window_shift
+        elif window_type == "forward":
+            t_end += short_window_shift
+            t_start += short_window_shift
+
+    # ----------------------------------------------
+    #           aggregate results
+    # ----------------------------------------------
+    seismicity_vs_forcing = {}
+
+    num_events = [
+        seismicity_vs_forcing_short_win[i]["event_count"].sum()
+        for i in range(num_short_windows)
+    ]
+    valid_window = np.array(num_events) >= min_num_events_in_short_window
+    num_valid_windows = np.sum(valid_window)
+    if num_valid_windows == 0:
+        print(f"Could not find a single valid window for {forcing.name}")
+        return
+    if num_valid_windows < min_num_valid_short_windows:
+        print(
+            f"Not enough valid windows (found {num_valid_windows}, "
+            f"required {min_num_valid_short_windows})"
+        )
+        return
+
+    if keep_short_windows:
+        seismicity_vs_forcing["window_times"] = np.asarray(window_times)[valid_window]
+
+    if aggregate == "weighted_mean":
+        # define weights proportionally to bin_duration, because bin_duration
+        # is itself proportional to the time interval covered by the forcing bin
+        weights = np.stack(
+            [
+                seismicity_vs_forcing_short_win[i]["bin_duration"]
+                for i in range(num_short_windows)
+                if valid_window[i]
+            ],
+            axis=-1,
+        )
+        weights /= np.sum(weights, axis=-1, keepdims=True)
+        operator = partial(_weighted_mean, weights=weights)
+        pulling_operator = partial(np.mean, axis=-1)
+
+    for field in seismicity_vs_forcing_short_win[0]:
+        # all the short-window quantities are aggregated
+        # into a single long-window estimate
+        if field == "bins":
+            continue
+        if field[-len("_err") :] == "_err":
+            continue
+        all_windows = np.stack(
+            [
+                seismicity_vs_forcing_short_win[i][field]
+                for i in range(num_short_windows)
+                if valid_window[i]
+            ],
+            axis=-1,
+        )
+
+        if svd_filtering_kwargs is not None:
+            all_windows = svd_filtering(all_windows, **svd_filtering_kwargs)
+
+        if wiener_filtering_kwargs is not None:
+            win_indexes = np.arange(all_windows.shape[1])
+            np.random.shuffle(win_indexes)
+            # robust estimation of noise with MAD
+            mad_across_windows = 1.48 * np.median(
+                np.abs(all_windows - np.median(all_windows, axis=1, keepdims=True)),
+                axis=1,
+            )
+            # fill in zeros with default value (this shouldn't really matter
+            # because cases with mad=0 are cases that are equally zero everywhere)
+            mad_across_windows[mad_across_windows == 0.0] = 0.2
+
+            noise_power = np.median(mad_across_windows) ** 2
+
+            wiener_filter = wiener_filtering_kwargs.get("mysize", [1, 1])
+            half_wiener_win = (
+                wiener_filter[0] // 2 + wiener_filter[0] % 2,
+                wiener_filter[1] // 2 + wiener_filter[1] % 2,
+            )
+            _padded = np.pad(
+                all_windows[:, win_indexes],
+                (
+                    (half_wiener_win[0], half_wiener_win[0]),
+                    (half_wiener_win[1], half_wiener_win[1]),
+                ),
+                mode="reflect",
+            )
+            all_windows = wiener(
+                _padded, noise=noise_power, **wiener_filtering_kwargs
+            )  # [half_wiener_win:-half_wiener_win, :]
+            if half_wiener_win[0] > 0:
+                all_windows = all_windows[half_wiener_win[0] : -half_wiener_win[0], :]
+            if half_wiener_win[1] > 0:
+                all_windows = all_windows[:, half_wiener_win[1] : -half_wiener_win[1]]
+
+        # if np.sum(np.isnan(all_windows)) > 0:
+        #    breakpoint()
+
+        if keep_short_windows:
+            seismicity_vs_forcing[f"all_windows_{field}"] = all_windows
+
+        # ---------------------------------------------------------
+        #                  downsample
+        if downsample > 0:
+            # `bin_duration` and, consequently, `relative_rate` must be
+            # estimated in narrow bins. However, the number of bins can
+            # afterward be reduced by downsampling (average pooling).
+            length = all_windows.shape[0]
+            num_windows = all_windows.shape[1]
+
+            assert downsample * (length // downsample) == length
+
+            downsampled_windows = np.zeros(
+                (length // downsample, num_windows), dtype=all_windows.dtype
+            )
+            for i in range(all_windows.shape[1]):
+                downsampled_windows[:, i] = pulling_operator(
+                    all_windows[:, i].reshape(-1, downsample),
+                    axis=-1,
+                )
+            all_windows = downsampled_windows
+
+        # ---------------------------------------------------------
+        #    aggregate short-window observations into one estimate
+        if field == "bin_duration":
+            seismicity_vs_forcing[field] = np.mean(all_windows, axis=-1).astype(
+                "float32"
+            )
+            seismicity_vs_forcing[f"{field}_err"] = np.mean(
+                all_windows, axis=-1
+            ).astype("float32")
+        elif num_bootstrap_for_errors > 0:
+            (
+                seismicity_vs_forcing[field],
+                seismicity_vs_forcing[f"{field}_err"],
+            ) = bootstrap_statistic(
+                all_windows, operator, n_bootstraps=num_bootstrap_for_errors
+            )
+        else:
+            seismicity_vs_forcing[field] = operator(all_windows)
+            seismicity_vs_forcing[f"{field}_err"] = err_operator(
+                    all_windows
+                    )
+
+
+        # -------------------------
+        #     normalize by median
+        # (cos or exp models have median equal to 1 or very close to it)
+        if field in {"relative_rate", "observed_rate"}:
+            median = np.ma.median(seismicity_vs_forcing[field])
+            #median = np.ma.mean(seismicity_vs_forcing[field])
+            seismicity_vs_forcing[f"{field}_err"] /= median
+            seismicity_vs_forcing[field] /= median
+        # ---------------------------------------------------------
+    seismicity_vs_forcing["bins"] = forcing_bin_edges
+    if downsample > 0:
+        # downsample bins if necessary
+        seismicity_vs_forcing["bins"] = seismicity_vs_forcing["bins"][::downsample]
+    if len(seismicity_vs_forcing) == 0:
+        return None
+    else:
+        return seismicity_vs_forcing
+
+
+def bootstrap_statistic(x, operator, n_bootstraps=100):
+    """
+    Estimate the mean and standard deviation of an operator applied to
+    bootstrapped samples of data.
+
+    Parameters:
+    -----------
+    x : numpy.ndarray
+        Input data to be bootstrapped.
+
+    operator : callable
+        A function that computes a statistic or operation on a data sample.
+
+    n_bootstraps : int, optional
+        The number of bootstrap resamples to generate (default is 100).
+
+    Returns:
+    --------
+    numpy.ndarray
+        An array of shape (x.shape[0],) representing the mean of the
+        operator's output on bootstrapped samples.
+
+    numpy.ndarray
+        An array of shape (x.shape[0],) representing the standard deviation of
+        the operator's output on bootstrapped samples.
+    """
+    if x.ndim > 1:
+        instances = np.zeros((n_bootstraps, x.shape[0]), dtype=np.float32)
+    else:
+        instances = np.zeros(n_bootstraps, dtype=np.float32)
+
+    for i in range(n_bootstraps):
+        replica = np.take(
+            x, np.random.randint(0, x.shape[-1] - 1, size=x.shape[-1]), axis=-1
+        )
+        instances[i] = operator(replica)
+    return np.mean(instances, axis=0), np.std(instances, axis=0)
+
+
+def weighted_linear_regression(X, Y, W=None):
+    """
+    Parameters
+    -----------
+    X: (n,) numpy array or list
+    Y: (n,) numpy array or list
+    W: default to None, (n,) numpy array or list
+    Returns
+    --------
+    best_slope: scalar float,
+        Best slope from the least square formula
+    best_intercept: scalar float,
+        Best intercept from the least square formula
+    std_err: scalar float,
+        Error on the slope
+    """
+    X = np.asarray(X)
+    if W is None:
+        W = np.ones(X.size)
+    W_sum = W.sum()
+    x_mean = np.sum(W * X) / W_sum
+    y_mean = np.sum(W * Y) / W_sum
+    x_var = np.sum(W * (X - x_mean) ** 2)
+    xy_cov = np.sum(W * (X - x_mean) * (Y - y_mean))
+    best_slope = xy_cov / x_var
+    best_intercept = y_mean - best_slope * x_mean
+    # errors in best_slope and best_intercept
+    estimate = best_intercept + best_slope * X
+    s2 = sum(estimate - Y) ** 2 / (Y.size - 2)
+    s2_intercept = s2 * (1.0 / X.size + x_mean**2 / ((X.size - 1) * x_var))
+    s2_slope = s2 * (1.0 / ((X.size - 1) * x_var))
+    return best_slope, best_intercept, np.sqrt(s2_slope)
+
+
+def fit_stress_corrosion(x, y, y_err):
+    """
+    Fit a stress-corrosion model to data and return optimized parameters.
+
+    Parameters:
+    -----------
+    x : numpy.ndarray
+        Independent variable representing stress data.
+
+    y : numpy.ndarray
+        Dependent variable representing a corresponding response.
+
+    y_err : numpy.ndarray
+        Error values associated with the dependent variable y.
+
+    Returns:
+    --------
+    numpy.ndarray
+        An array of optimized parameters for the stress-corrosion model.
+    """
+    from scipy.optimize import curve_fit, minimize
+
+    # print(x, y)
+    p0 = [2, 1.0e5]
+    bounds = [(2.0, 50.0), (1.0e3, 10.0e6)]
+    # popt, pcov = curve_fit(stress_corrosion, x, y, p0=p0, bounds=bounds, sigma=y_err)
+    # perr = np.sqrt(np.diag(pcov))
+
+    loss = lambda params: np.sum((y - stress_corrosion(x, params[0], params[1])) ** 2)
+    results = minimize(loss, p0, bounds=bounds)
+    return results.x
+    # return *popt, *perr
+
+def cos(x, a, b):
+    return a * np.cos(x - b)
+
+
+def stress_corrosion(coulomb_stress_Pa, half_corrosion_index, eq_stress_drop_Pa):
+    """ """
+    return 1.0 + ((coulomb_stress_Pa / eq_stress_drop_Pa) ** 2) ** half_corrosion_index
+
+
+def rate_state(x, Asig_Pa):
+    """ """
+    return np.exp(x / Asig_Pa)
+
+
+def fit_errors(x, a, b, a_err, b_err):
+    df_da = np.cos(x - b)
+    df_db = +a * np.sin(x - b)
+    err = np.sqrt((df_da * a_err) ** 2 + (df_db * b_err) ** 2)
+    return err
+
+
+def pearson_chi_squared_test(o, e, p):
+    """Compute the p-value of `o` being distributed as `e`.
+
+    Compute the p-value that observations `o` are distributed according
+    to the theoretical distribution `e`, which has `p`-1 degrees of freedom.
+    This is Pearson's chi-squared test.
+
+    """
+    from scipy.stats import chi2
+
+    o_norm = o / np.sum(o)
+    e_norm = e / np.sum(e)
+    chi_squared = np.sum((o_norm - e_norm) ** 2 / e_norm)
+    print(f"Chi-2: {chi_squared:.2f}")
+    degrees_of_freedom = len(o) - p
+    pvalue = chi2.sf(chi_squared, degrees_of_freedom)
+    print(f"Critical value at 95% CI: {chi2.ppf(q=0.95, df=len(o)-1):.3f}")
+    return pvalue
+
+
+def kolmogorov_smirnov_test(o, e):
+    """Kolmogorov-Smirnov test."""
+    o_norm = o / np.sum(o)
+    e_norm = e / np.sum(e)
+    e_cdf = np.cumsum(e_norm)
+    e_cdf /= e_cdf[-1]
+    o_cdf = np.cumsum(o_norm)
+    o_cdf /= o_cdf[-1]
+    KS_statistic = np.abs(o_cdf - e_cdf).max()
+
+
+def generalized_poisson(k, lbd):
+    """Generalization of the poisson distribution for non-integer data.
+
+    Use the gamma function to generalize the factorial function.
+
+    Parameters
+    -----------
+    k: scalar float or int,
+        Number of observed events.
+    lbd: scalar float or int,
+        Expected number of events.
+    Returns
+    --------
+    p: scalar float,
+        The poisson p-value for k given lbd.
+    """
+    from scipy.special import gamma
+
+    return lbd**k * np.exp(-lbd) / gamma(k + 1)
+
+
+def loglikelihood_poisson(observed, expectation):
+    """ """
+    return np.sum(generalized_poisson(observed, expectation))
+
+# --------------------------------------------------------------------
+#                       plotting functions
+# --------------------------------------------------------------------
+
+# --------------------------------------------------------------------
+#                     data loading functions
+# --------------------------------------------------------------------
+
+
+def load_tidal_stress(
+    tidal_stress_path,
+    fields=["shear_stress", "normal_stress", "coulomb_stress"],
+    rate=True,
+    t_start=None,
+    t_end=None,
+    mu=None,
+):
+    """ """
+    tidal_stress = {}
+    # load tides (computed by p01_StressFromTidesPlaneStrain.py)
+    with h5.File(tidal_stress_path, mode="r") as fin:
+        starttime = fin["starttime"][()].decode("utf-8")
+        delta = fin["delta_hour"][()] * 3600  # delta in seconds
+        if mu is None:
+            mu = fin["friction"][()]  # coefficient of friction
+        for field in fields:
+            if field in fin:
+                tidal_stress[field] = fin[field][()]
+                n_samples = len(tidal_stress[field])
+        if ("coulomb_stress" in fields) and "coulomb_stress" not in fin:
+            tidal_stress["coulomb_stress"] = (
+                    fin["shear_stress"][()] + mu * fin["normal_stress"][()]
+                    )
+    tref = np.datetime64(starttime).astype("datetime64[s]").astype("int64")
+
+    # calendar time of stress time series
+    time = pd.Series(
+        pd.date_range(start=starttime, freq=f"{delta/3600.}h", periods=n_samples)
+    )
+    tvec_tide = np.arange(0, n_samples) * delta + tref
+
+    if t_end is not None:
+        selection = tvec_tide <= pd.Timestamp(t_end).timestamp()
+        for field in tidal_stress:
+            tidal_stress[field] = tidal_stress[field][selection]
+        tvec_tide = tvec_tide[selection]
+        time = time[selection]
+    if t_start is not None:
+        selection = tvec_tide >= pd.Timestamp(t_start).timestamp()
+        for field in tidal_stress:
+            tidal_stress[field] = tidal_stress[field][selection]
+        tvec_tide = tvec_tide[selection]
+        time = time[selection]
+
+    if rate:
+        # compute stressing rates
+        dt_c = tvec_tide[1:] - tvec_tide[:-1]
+        dt_c = np.hstack((dt_c[0], dt_c))
+        for field in list(tidal_stress.keys()):
+            tidal_stress[f"{field}_rate"] = np.gradient(tidal_stress[field]) / dt_c
+
+    tidal_stress["time_sec"] = tvec_tide
+
+    tidal_stress = pd.DataFrame(tidal_stress)
+    tidal_stress.set_index(time, inplace=True)
+
+    return tidal_stress
+
+
+def compute_semidiurnal_phase_at_eq(catalog, tidal_stress, fields):
+    """Interpolate semidiurnal phase at earthquake timings.
+
+    Notes: Use `compute_instantaneous_phase_at_eq` instead.
+    """
+    return compute_instantaneous_phase_at_eq(catalog, tidal_stress, fields)
+
+
+def compute_instantaneous_phase_at_eq(
+    catalog, tidal_stress, fields, attach_unravelled_phase=False
+):
+    """Interpolate instantaneous phase at earthquake timings."""
+    eq_timings = catalog.loc[:, "t_eq_s"].values
+    for field in fields:
+        if f"unravelled_{field}" in tidal_stress:
+            # catalog.loc[indexes, field] = (
+            #    np.interp(
+            #        catalog.loc[indexes, "t_eq_s"].values,
+            #        tidal_stress["time_sec"].values,
+            #        180.0 + tidal_stress[f"unravelled_{field}"].values,
+            #    )
+            # ) % 360.0 - 180.0
+            catalog = catalog.assign(
+                tmp_name=np.interp(
+                    eq_timings,
+                    tidal_stress["time_sec"].values,
+                    180.0 + tidal_stress[f"unravelled_{field}"].values,
+                )
+                % 360.0
+                - 180.0,
+            )
+            if attach_unravelled_phase:
+                # catalog.loc[indexes, f"unravelled_{field}"] = np.interp(
+                #    catalog.loc[indexes, "t_eq_s"].values,
+                #    tidal_stress["time_sec"].values,
+                #    tidal_stress[f"unravelled_{field}"].values,
+                # )
+                catalog = catalog.assign(
+                    tmp_name2=np.interp(
+                        eq_timings,
+                        tidal_stress["time_sec"].values,
+                        tidal_stress[f"unravelled_{field}"].values,
+                    ),
+                )
+                catalog.rename(
+                    columns={"tmp_name2": f"unravelled_{field}"}, inplace=True
+                )
+        else:
+            catalog = catalog.assign(
+                tmp_name=np.interp(
+                    eq_timings,
+                    tidal_stress["time_sec"].values,
+                    tidal_stress[field].values,
+                ),
+            )
+        catalog.rename(columns={"tmp_name": field}, inplace=True)
+    return catalog
+
+
+# def unravel_phase(phases, degree=True):
+#     """
+#     """
+#     if not degree:
+#         phases = np.rad2deg(phases)
+#     # 1) differentiate phases
+#     dphase = phases[1:] - phases[:-1]
+#     dphase_plus_360 = 360. + phases[1:] - phases[:-1]
+#     dphase_minus_360 = -360. + phases[1:] - phases[:-1]
+#     dphase = np.maximum(
+#         dphase, dphase_plus_360, out=dphase, where=np.abs(dphase_plus_360) < np.abs(dphase)
+#     )
+#     dphase = np.minimum(
+#         dphase, dphase_minus_360, out=dphase, where=np.abs(dphase_minus_360) < np.abs(dphase)
+#     )
+#     if not degree:
+#         dphase = np.deg2rad(dphase)
+#     # convert dphase to float64 in case it is not
+#     # otherwise, error will accumulates in cumsum
+#     return phases[0] + np.hstack( (0., np.cumsum(dphase.astype("float64"))) )
+#     # return phases[0] + np.hstack( (0., np.cumsum(dphase)) )
+
+
+def unravel_phase(phases, degree=True):
+    """ """
+    phases = np.float64(phases)
+    if degree:
+        return np.unwrap(phases, period=360.0)
+    else:
+        return np.unwrap(phases)
+
+
+def compute_stress_at_eq(catalog, tidal_stress, fields):
+    """Interpolate stress at earthquake timings."""
+    # indexes = catalog.index
+    eq_timings = catalog.loc[:, "t_eq_s"].values
+    for f in fields:
+        catalog = catalog.assign(
+            f=np.interp(
+                eq_timings,
+                tidal_stress["time_sec"].values,
+                tidal_stress[f].values,
+            ),
+        )
+        catalog.rename(columns={"f": f}, inplace=True)
+    return catalog
+
+
+def compute_fortnightly(catalog, tidal_stress, full_moons_path):
+    """Compute lunar phase and attribute a fortnightly phase to each earthquake."""
+    # We use the timings of the full moons to measure the fortnightly cycle.
+    full_moons = pd.to_datetime(pd.read_csv(full_moons_path, index_col=0)["full_moons"])
+    full_moons = full_moons[(full_moons > "2000-01-01") & (full_moons < "2020-01-01")]
+    avg_moon_period_sec = np.mean(
+        np.diff(full_moons.values.astype("datetime64[s]").astype("float64"))
+    )
+
+    full_moon_time = pd.date_range(
+        start=full_moons.min(), end=full_moons.max(), periods=100 * len(full_moons)
+    )
+    rel_time_sec = full_moon_time.values.astype("datetime64[s]").astype("float64")
+    rel_time_sec -= rel_time_sec[0]
+
+    lunar_times = pd.Timestamp(full_moons.min()) + rel_time_sec.astype("timedelta64[s]")
+    # lunar_cycle = np.cos(2.0 * np.pi * (rel_time_sec / avg_moon_period_sec))
+    # lunar_pos = (360.0 * (rel_time_sec / avg_moon_period_sec)) % 360
+    # unravel the lunar phase for easier interpolation
+    lunar_pos_unravelled = 360.0 * (rel_time_sec / avg_moon_period_sec)
+
+    # compute the lunar phase at the tide time series times for
+    # decomposing catalog into rising and falling fortnightly
+    tidal_stress["lunar_phase"] = (
+        np.interp(
+            tidal_stress["time_sec"],
+            lunar_times.astype("datetime64[s]").astype("float64"),
+            lunar_pos_unravelled,
+        )
+        % 360
+    )
+    tidal_stress["fortnightly_phase"] = (
+        2.0 * tidal_stress["lunar_phase"]
+    ) % 360 - 180.0
+    tidal_stress["rising_fortnightly"] = tidal_stress["fortnightly_phase"] > 0.0
+    tidal_stress["falling_fortnightly"] = ~tidal_stress["rising_fortnightly"]
+
+    # compute the lunar phase at the earthquake times for
+    # decomposing catalog into rising and falling fortnightly
+    catalog["lunar_phase"] = (
+        np.interp(
+            catalog["t_eq_s"],
+            lunar_times.astype("datetime64[s]").astype("float64"),
+            lunar_pos_unravelled,
+        )
+        % 360.0
+    )
+    catalog["fortnightly_phase"] = (2.0 * catalog["lunar_phase"]) % 360 - 180.0
+
+    catalog["rising_fortnightly"] = catalog["fortnightly_phase"] > 0.0
+    catalog["falling_fortnightly"] = ~catalog["rising_fortnightly"]
+
+    # ## Attribute a fortnightly phase to each earthquake
+    catalog["fortnightly_phase"] = np.interp(
+        catalog["t_eq_s"], tidal_stress["time_sec"], tidal_stress["fortnightly_phase"]
+    )
+
+
+def SVDWF(
+    matrix,
+    expl_var=0.4,
+    max_singular_values=5,
+    wiener_filter_colsize=None,
+):
+    """
+    Implementation of the Singular Value Decomposition Wiener Filter (SVDWF)
+    described in Moreau et al 2017.
+
+    Parameters
+    ----------
+    matrix: (n x m) numpy array
+        n is the number of events, m is the number of time samples
+        per event.
+    n_singular_values: scalar float
+        Number of singular values to retain in the
+        SVD decomposition of matrix.
+    max_freq: scalar float, default to cfg.MAX_FREQ_HZ
+        The maximum frequency of the data, or maximum target
+        frequency, is used to determined the size in the
+        time axis of the Wiener filter.
+
+    Returns
+    --------
+    filtered_data: (n x m) numpy array
+        The matrix filtered through the SVD procedure.
+    """
+    from scipy.linalg import svd
+    from scipy.signal import wiener
+    import matplotlib.pyplot as plt
+
+    try:
+        U, S, Vt = svd(matrix, full_matrices=False)
+    except Exception as e:
+        print(e)
+        print("Problem while computing the svd...!")
+        return np.random.normal(loc=0.0, scale=1.0, size=matrix.shape)
+    if wiener_filter_colsize is None:
+        wiener_filter_colsize = U.shape[0]
+    # wiener_filter = [wiener_filter_colsize, int(cfg.SAMPLING_RATE_HZ/max_freq)]
+    wiener_filter = [wiener_filter_colsize, 1]
+    filtered_data = np.zeros((U.shape[0], Vt.shape[1]), dtype=np.float32)
+    # select the number of singular values
+    # in order to explain 100xn_singular_values%
+    # of the variance of the matrix
+    var = np.cumsum(S**2)
+    if var[-1] == 0.0:
+        # only zeros in matrix
+        return filtered_data
+    var /= var[-1]
+    n_singular_values = np.min(np.where(var >= expl_var)[0]) + 1
+    n_singular_values = min(max_singular_values, n_singular_values)
+    for n in range(min(U.shape[0], n_singular_values)):
+        s_n = np.zeros(S.size, dtype=np.float32)
+        s_n[n] = S[n]
+        projection_n = np.dot(U, np.dot(np.diag(s_n), Vt))
+        if wiener_filter[0] == 1 and wiener_filter[1] == 1:
+            # no wiener filtering
+            filtered_projection = projection_n
+        else:
+            # the following application of Wiener filtering is questionable: because each projection in this loop is a projection
+            # onto a vector space with one dimension, all the waveforms are colinear: they just differ by an amplitude factor (but same shape).
+            filtered_projection = wiener(
+                projection_n,
+                # mysize=[max(2, int(U.shape[0]/10)), int(cfg.SAMPLING_RATE_HZ/freqmax)]
+                mysize=wiener_filter,
+            )
+        # filtered_projection = projection_n
+        if np.isnan(filtered_projection.max()):
+            continue
+        filtered_data += filtered_projection
+    if wiener_filter[0] == 1 and wiener_filter[1] == 1:
+        # no wiener filtering
+        pass
+    else:
+        filtered_data = wiener(filtered_data, mysize=wiener_filter)
+    # remove nans or infs
+    filtered_data[np.isnan(filtered_data)] = 0.0
+    filtered_data[np.isinf(filtered_data)] = 0.0
+    return filtered_data
+
+
+def spectral_filtering(x, singular_value_index=0):
+    from scipy.linalg import svd
+
+    U, S, Vt = svd(x, full_matrices=False)
+    s_n = np.zeros(S.size, dtype=np.float32)
+    s_n[singular_value_index] = S[singular_value_index]
+    projection_n = np.dot(U, np.dot(np.diag(s_n), Vt))
+    return projection_n
+
+
+def get_singular_vector(x, singular_value_index=0):
+    """
+    Parameters
+    ----------
+    x : numpy.ndarray
+        (num_bins, num_windows) ndarray.
+    """
+    from scipy.linalg import svd
+
+    V, S, Ut = svd(x - 1.0, full_matrices=False)
+
+    singular_vector = V[:, singular_value_index]
+
+    coeff = np.mean(Ut[singular_value_index, :] * S[singular_value_index])
+    return 1.0 + coeff * singular_vector
+
+
+def get_singular_vector2(x, singular_value_index=0):
+    """
+    Parameters
+    ----------
+    x : numpy.ndarray
+        (num_bins, num_windows) ndarray.
+    """
+    from scipy.linalg import svd
+
+    V, S, Ut = svd(x - 1.0, full_matrices=False)
+
+    singular_vector0 = V[:, 0]
+    coeff0 = np.median(Ut[0, :] * S[0])
+
+    singular_vector1 = V[:, 1]
+    coeff1 = np.median(Ut[1, :] * S[1])
+
+    if abs(coeff1) > 0.8 * abs(coeff0):
+        return 1.0 + np.mean(Ut[1, :] * S[1]) * singular_vector1
+    else:
+        return 1.0 + np.mean(Ut[0, :] * S[0]) * singular_vector0
+
+
+def _svd_w_robust_ordering(x):
+    """
+    Parameters
+    ----------
+    x : numpy.ndarray
+        (num_bins, num_windows) ndarray.
+    """
+    from scipy.linalg import svd
+
+    V, S, Ut = svd(x, full_matrices=False)
+
+    coefficients = np.median(Ut * S[:, None], axis=1)
+    weights = np.abs(coefficients)
+    weights /= weights.sum()
+    ordered_ind = np.argsort(weights)[::-1]
+
+    return (V[:, ordered_ind], S[ordered_ind], Ut[ordered_ind, :], weights[ordered_ind])
+
+
+def svd_filtering(x, reconstruction_factor=0.66):
+    """
+    Parameters
+    ----------
+    x : numpy.ndarray
+        (num_bins, num_windows) ndarray.
+    """
+    V, S, Ut, weights = _svd_w_robust_ordering(x - 1.0)
+
+    first_above_threshold = np.where(np.cumsum(weights) >= reconstruction_factor)[0][0]
+    indexes = np.arange(first_above_threshold + 1)
+
+    return 1.0 + V[:, indexes] @ np.diag(S[indexes]) @ Ut[indexes, :]
+
+
+def get_singular_vector3(x, reconstruction_factor=0.66):
+    """
+    Parameters
+    ----------
+    x : numpy.ndarray
+        (num_bins, num_windows) ndarray.
+    """
+    V, S, Ut, weights = _svd_w_robust_ordering(x - 1.0)
+
+    first_above_threshold = np.where(np.cumsum(weights) >= reconstruction_factor)[0][0]
+    indexes = np.arange(first_above_threshold + 1)
+
+    coefficients = np.median(Ut[indexes, :] * S[indexes, None], axis=1)
+    return 1.0 + np.sum(coefficients[None, :] * V[:, indexes], axis=1)
+
+
+def get_singular_vector_stochastic(x, max_singular_values=3):
+    """
+    Parameters
+    ----------
+    x : numpy.ndarray
+        (num_bins, num_windows) ndarray.
+    """
+    V, S, Ut, weights = _svd_w_robust_ordering(x - 1.0)
+    num_singular_values = min(max_singular_values, len(S))
+
+    coefficients = np.median(
+        Ut[:num_singular_values, :] * S[:num_singular_values, None], axis=1
+    )
+    weights = weights[:num_singular_values]
+
+    singular_vector_index = np.random.choice(
+        np.arange(num_singular_values),
+        p=weights,
+        size=num_singular_values,
+        replace=False,
+    )
+
+    return 1.0 + np.sum(
+        coefficients[None, singular_vector_index] * V[:, singular_vector_index], axis=1
+    )
+
+
+def compute_AIC(residuals, num_params):
+    """Akaike Information Criterion for least-squares solution."""
+    num_samples = len(residuals)
+    return (
+        num_samples * np.log(2.0 * np.pi)
+        + num_samples * np.log(np.sum(residuals**2) / num_samples)
+        + num_samples
+        + 2 * num_params
+    )
+
+
+def robust_instantaneous_phase(x, degree=True):
+    """Instantaneous phase from  E. Poggiagliolmi , A. Vesnaver, GJI, 2014.
+
+    "Instantaneous phase and frequency derived without user-defined parameters"
+    """
+    from scipy.signal import hilbert
+
+    x_a = hilbert(x)
+    x_a = x_a / np.abs(x_a)
+    inst_freq = np.conj(x_a)[1:] * np.diff(x_a) * -1j
+    inst_phase = np.cumsum(np.real(inst_freq).astype("float64"))
+    # shift and wrap phase
+    inst_phase = (inst_phase + np.pi) % (2.0 * np.pi) - np.pi
+    if degree:
+        return np.rad2deg(inst_phase)
+    else:
+        return inst_phase
+
+
+#def point_in_any_interval(point, intervals):
+#    try:
+#        intervals.get_loc(point)
+#        return True
+#    except KeyError:
+#        return False
+#
+#
+#def compute_phase(forcing, time):
+#    """ """
+#    from scipy.signal import find_peaks
+#
+#    maxima = find_peaks(forcing, height=0.01, distance=10)[0]
+#    minima = find_peaks(-forcing, height=0.01, distance=10)[0]
+#    extrema = np.sort(np.concatenate((maxima, minima)))
+#    # find the indices of the extrema where the forcing is decreasing
+#    dec_left = extrema[np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] < 0)[0]]
+#    dec_right = extrema[
+#        np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] < 0)[0] + 1
+#    ]
+#    # find the indices of the extrema where the forcing is increasing
+#    inc_left = extrema[np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] > 0)[0]]
+#    inc_right = extrema[
+#        np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] > 0)[0] + 1
+#    ]
+#    # define the intervals where the forcing is increasing and decreasing
+#    interval_dec = pd.IntervalIndex(
+#        pd.arrays.IntervalArray.from_arrays(
+#            time[dec_left], time[dec_right], closed="left"
+#        )
+#    )
+#    interval_inc = pd.IntervalIndex(
+#        pd.arrays.IntervalArray.from_arrays(
+#            time[inc_left], time[inc_right], closed="left"
+#        )
+#    )
+#    # find where the forcing is increasing or decreasing
+#    #time = pd.Series(time)
+#    dec = interval_dec.contains(time[:, None]).any(axis=1)
+#    inc = interval_inc.contains(time[:, None]).any(axis=1)
+#    #dec = time.apply(lambda x: point_in_any_interval(x, interval_dec))
+#    #inc = time.apply(lambda x: point_in_any_interval(x, interval_inc))
+#    # compute the phase for each interval
+#    phase = -1000.0 * np.ones(len(time), dtype=np.float32)
+#
+#    ref_time = time[extrema]
+#    ref_phase = np.zeros(len(extrema))
+#    ref_phase[np.isin(extrema, maxima)] = 0.0
+#    # first, compute phase in decreasing intervals
+#    ref_phase[np.isin(extrema, minima)] = 180.0
+#    # phase[dec] = 180. * (time[dec] - ref_time[dec_left]) / (ref_time[dec_right] - ref_time[dec_left])
+#    phase[dec] = np.interp(time[dec], ref_time, ref_phase)
+#    # then, compute phase in increasing intervals
+#    ref_phase[np.isin(extrema, minima)] = -180.0
+#    phase[inc] = np.interp(time[inc], ref_time, ref_phase)
+#
+#    phase[phase == -1000.0] = np.nan
+#    return phase
+
+#def compute_phase(forcing, time):
+#    from scipy.signal import find_peaks
+#    maxima = find_peaks(forcing, height=0.01, distance=10)[0]
+#    minima = find_peaks(-forcing, height=0.01, distance=10)[0]
+#    extrema = np.sort(np.concatenate((maxima, minima)))
+#    # find the indices of the extrema where the forcing is decreasing
+#    dec_left = extrema[np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] < 0)[0]]
+#    dec_right = extrema[np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] < 0)[0] + 1]
+#    # find the indices of the extrema where the forcing is increasing
+#    inc_left = extrema[np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] > 0)[0]]
+#    inc_right = extrema[np.where(forcing[extrema[1:]] - forcing[extrema[:-1]] > 0)[0] + 1]
+#
+#    # compute the phase for each interval
+#    phase = -1000. * np.ones(len(time), dtype=np.float32)
+#
+#    ref_time = time[extrema]
+#    ref_phase = np.zeros(len(extrema))
+#    ref_phase[np.isin(extrema, maxima)] = 0.
+#    # first, compute phase in decreasing intervals
+#    ref_phase[np.isin(extrema, minima)] = 180.
+#    dec = np.zeros(len(time), dtype=bool)
+#    for i in tqdm(range(len(dec_left)), desc="Decreascing intervals"):
+#        #dec = dec | ((time >= time[dec_left[i]]) & (time < time[dec_right[i]]))
+#        dec = np.logical_or(dec, ((time >= time[dec_left[i]]) & (time < time[dec_right[i]])))
+#    phase[dec] = np.interp(time[dec], ref_time, ref_phase)
+#    
+#    # then, compute phase in increasing intervals
+#    ref_phase[np.isin(extrema, minima)] = -180.
+#    inc = np.zeros(len(time), dtype=bool)
+#    for i in tqdm(range(len(inc_left)), desc="Increasing intervals"):
+#        #inc = inc | ((time >= time[inc_left[i]]) & (time < time[inc_right[i]]))
+#        inc = np.logical_or(inc, ((time >= time[inc_left[i]]) & (time < time[inc_right[i]])))
+#    phase[inc] = np.interp(time[inc], ref_time, ref_phase)
+#
+#    phase[phase == -1000.] = np.nan
+#    return phase
+
+def compute_phase(forcing, time, return_extrema=False, trim_edges=100, **kwargs):
+    from scipy.signal import find_peaks
+
+    kwargs.setdefault("distance", 100)
+    kwargs.setdefault("prominence", 0.25)
+    kwargs.setdefault("width", 5)
+
+    maxima = find_peaks(forcing, **kwargs)[0]
+    maxima = maxima[(maxima > trim_edges) & (maxima < len(forcing) - trim_edges)]
+    minima = find_peaks(-forcing, **kwargs)[0]
+    minima = minima[(minima > trim_edges) & (minima < len(forcing) - trim_edges)]
+    extrema = np.sort(np.concatenate((maxima, minima)))
+
+    ref_phase = np.zeros(len(extrema))
+    if minima[0] < maxima[0]:
+        ref_phase[0] = -180.
+    else:
+        ref_phase[0] = 0.
+    ref_phase[1:] = 180.
+    ref_phase = np.cumsum(ref_phase)
+    ref_time = time[extrema]
+
+    # compute the phase for each interval
+    phase = -1000. * np.ones(len(time), dtype=np.float64)
+
+    time_in = (time >= time[extrema[0]]) & (time <= time[extrema[-1]])
+    phase[time_in] = np.interp(time[time_in], ref_time, ref_phase)
+
+    phase[phase == -1000.] = np.nan
+
+    phase = (phase + 180.) % 360. - 180.
+
+    if return_extrema:
+        return phase, minima, maxima
+    else:
+        return phase

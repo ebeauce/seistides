@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seistides"
+dynamic = ["version"]
+description = "Analysis of tidal modulation of seismicity"
+authors = [
+    { name = "Eric Beauce" }
+]
+license = { text = "GPL" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy", "pandas", "scipy", "tqdm"]
+
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License (GPL)",
+    "Programming Language :: Python :: 3.10",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/ebeauce/seistides"
+
+[tool.setuptools.packages.find]
+include = ["seistides*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "seistides.__version__" }
+
+[tool.setuptools]
+include-package-data = true
+zip-safe = false
