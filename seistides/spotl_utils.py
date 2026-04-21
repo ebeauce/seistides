@@ -1,11 +1,7 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Thu Jun  9 09:32:00 2022
-
-"""
-
 import os
+HOME = os.path.expanduser("~")
+ROOT = HOME
+
 import pandas as pd
 import numpy as np
 
@@ -32,7 +28,7 @@ def run_Ertid_potential(lat, lon, year1, day1, year2, day2, delta_hours):
 
 
 # calculate strain with ertid
-def run_Ertid(
+def solid_earth_tides(
     station_lat,
     station_lon,
     year1,
@@ -43,7 +39,7 @@ def run_Ertid(
     azimuth1=0.0,
     azimuth2=270.0,
     azimuth3=315.0,
-    files_basename="solid_earth_tides_Ridgecrest",
+    files_basename="solid_earth_tides_Japan",
 ):
     """Call `ertid` from SPOTL.
 
@@ -96,34 +92,34 @@ def run_Ertid(
         Azimuth, angle from north in degrees, of second channel.
     azimuth3: float, default to 315
         Azimuth, angle from north in degrees, of third channel.
-    files_basename: string, default to 'solid_earth_tides_Ridgecrest'
+    files_basename: string, default to 'solid_earth_tides_Japan'
         Basename of the output files.
     """
     os.system("rm run_ertid.sh")
-    fin = open("run_ertid.sh", "a")
-    fin.write("#!/bin/csh\n")
-    fin.write("ertid << EOF\n")
-    fin.write(str(year1) + " " + str(jul_day1) + " 0\n")  # start time
-    fin.write(str(year2) + " " + str(jul_day2) + " 0\n")  # end time
-    fin.write(str(delta_hours) + "\n")  # sample interval
-    fin.write("t\n")  #
-    fin.write(str(station_lat) + "\n")  # "station" latitude
-    fin.write(str(station_lon) + "\n")  # "station" longitude
-    fin.write("0\n")
-    fin.write("0\n")
-    fin.write("3\n")
-    fin.write(f"{azimuth1:.0f}\n")
-    fin.write(f"{azimuth2:.0f}\n")
-    fin.write(f"{azimuth3:.0f}\n")
-    fin.write(f"{files_basename}_az{azimuth1:.0f}.txt\n")
-    fin.write(f"{files_basename}_az{azimuth2:.0f}.txt\n")
-    fin.write(f"{files_basename}_az{azimuth3:.0f}.txt\n")
-    fin.write("EOF\n")
-    fin.close()
+    f = open("run_ertid.sh", "a")
+    f.write("#!/bin/csh\n")
+    f.write("ertid << EOF\n")
+    f.write(str(year1) + " " + str(jul_day1) + " 0\n")  # start time
+    f.write(str(year2) + " " + str(jul_day2) + " 0\n")  # end time
+    f.write(str(delta_hours) + "\n")  # sample interval
+    f.write("t\n")  #
+    f.write(str(station_lat) + "\n")  # "station" latitude
+    f.write(str(station_lon) + "\n")  # "station" longitude
+    f.write("0\n")
+    f.write("0\n")
+    f.write("3\n")
+    f.write(f"{azimuth1:.0f}\n")
+    f.write(f"{azimuth2:.0f}\n")
+    f.write(f"{azimuth3:.0f}\n")
+    f.write(f"{files_basename}_az{azimuth1:.0f}.txt\n")
+    f.write(f"{files_basename}_az{azimuth2:.0f}.txt\n")
+    f.write(f"{files_basename}_az{azimuth3:.0f}.txt\n")
+    f.write("EOF\n")
+    f.close()
 
     os.system("sh run_ertid.sh")
 
-def ocean_load_example1(
+def ocean_load(
     station_name,
     station_longitude,
     station_latitude,
@@ -132,160 +128,87 @@ def ocean_load_example1(
     julday_start,
     n_periods,
     sample_time_sec,
+    local_models,
     hour_start=0,
     minute_start=0,
     second_start=0,
-    working_dir="/home/eric/software/SPOTL/spotl/working",
+    working_dir=os.path.join(ROOT, "software/SPOTL/spotl/working"),
     azimuth1=0.0,
     azimuth2=270.0,
     azimuth3=315.0,
-    files_basename="ocean_load_Ridgecrest_test",
-    earth_green_function="gr.gbaver.wef.p02.ce",
-    tidal_components=["o1", "p1"],
-):
-    """Compute strain from ocean tides.
-
-    Compute the strain produced by the oceanic tides using a regional,
-    west coast model and a global model.
-
-    Parameters
-    -----------
-    azimuth1: float, default to 0
-        Azimuth, angle from north in degrees, of first channel.
-    azimuth2: float, default to 270
-        Azimuth, angle from north in degrees, of second channel.
-    azimuth3: float, default to 315
-        Azimuth, angle from north in degrees, of third channel.
-    files_basename: string, default to 'solid_earth_tides_Ridgecrest'
-        Basename of all the files produced by SPOTL's routines.
-
-    """
-    import glob
-    from time import sleep
-
-    # keep current working directory in memory for later
-    cwd = os.getcwd()
-    # go to target working dir
-    os.chdir(working_dir)
-    # list of models used in each sub-region
-    models = ["osu.usawest.2010", "got4p7.2004"]
-    polygons = ["poly1", "poly2"]
-    # write the input shell file
-    with open(files_basename + ".csh", "w") as fin:
-        fin.write("#!/bin/csh\n")
-        # tides on US West coast
-        fin.write("polymake << EOF > poly1.tmp\n")
-        fin.write("+ osu.usawest.2010\n")
-        fin.write("EOF\n")
-        # global tides
-        fin.write("polymake << EOF > poly2.tmp\n")
-        fin.write("- osu.usawest.2010\n")
-        fin.write("EOF\n")
-        for i, comp in enumerate(tidal_components):
-            for poly, model in zip(polygons, models):
-                fin.write(
-                    f"nloadf {station_name} {station_latitude} {station_longitude} "
-                    f"{station_elevation_m} {comp}.{model} {earth_green_function} "
-                    f"l {poly}.tmp > {files_basename}_{poly}_{comp}.txt\n"
-                )
-            # combine all polygons
-            fin.write(
-                    f"cat {files_basename}_{polygons[0]}_{comp}.txt "
-                    f"{files_basename}_{polygons[1]}_{comp}.txt | "
-                    f"loadcomb c > {files_basename}_tmp1.txt\n"
-                    )
-            print(f"Adding {comp} to {files_basename}_all_components.txt...")
-            # add this tidal component to others
-            if i == 0:
-                fin.write(
-                        f"cat {files_basename}_tmp1.txt > "
-                        f"{files_basename}_all_components.txt\n"
-                        )
-            else:
-                fin.write(
-                        f"cat {files_basename}_tmp1.txt >> "
-                        f"{files_basename}_all_components.txt\n"
-                        )
-        # write the harmonic constants for extensional strain at given azimuths
-        fin.write(
-            f"harprp l {azimuth1} < {files_basename}_all_components.txt > "
-            f"harprp_out_{files_basename}_az{azimuth1:.0f}.txt\n"
-        )
-        fin.write(
-            f"harprp l {azimuth2} < {files_basename}_all_components.txt > "
-            f"harprp_out_{files_basename}_az{azimuth2:.0f}.txt\n"
-        )
-        fin.write(
-            f"harprp l {azimuth3} < {files_basename}_all_components.txt > "
-            f"harprp_out_{files_basename}_az{azimuth3:.0f}.txt\n"
-        )
-        # use the harmonic constants to compute the time series
-        # of tidal (nano)strain
-        fin.write(
-            f"hartid {year_start:d} {julday_start:d} {hour_start:d} "
-            f"{minute_start:d} {second_start:d} {n_periods:d} {sample_time_sec} "
-            f"< harprp_out_{files_basename}_az{azimuth1:.0f}.txt "
-            f"> tidal_series_{files_basename}_az{azimuth1:.0f}.txt\n"
-        )
-        fin.write(
-            f"hartid {year_start:d} {julday_start:d} {hour_start:d} "
-            f"{minute_start:d} {second_start:d} {n_periods:d} {sample_time_sec} "
-            f"< harprp_out_{files_basename}_az{azimuth2:.0f}.txt "
-            f"> tidal_series_{files_basename}_az{azimuth2:.0f}.txt\n"
-        )
-        fin.write(
-            f"hartid {year_start:d} {julday_start:d} {hour_start:d} "
-            f"{minute_start:d} {second_start:d} {n_periods:d} {sample_time_sec} "
-            f"< harprp_out_{files_basename}_az{azimuth3:.0f}.txt "
-            f"> tidal_series_{files_basename}_az{azimuth3:.0f}.txt\n"
-        )
-    # ready to run the script!
-    os.system(f"sh {files_basename}.csh")
-    # save all full file names
-    filenames = glob.glob(f"*{files_basename}*")
-    folder = os.getcwd()
-    # go back to initial working directory and move files there
-    os.chdir(cwd)
-    for fn in filenames:
-        os.system(f"mv {os.path.join(folder, fn)} .")
-    print("Done!")
-
-def ocean_load_example2(
-    station_name,
-    station_longitude,
-    station_latitude,
-    station_elevation_m,
-    year_start,
-    julday_start,
-    n_periods,
-    sample_time_sec,
-    hour_start=0,
-    minute_start=0,
-    second_start=0,
-    working_dir="/home/eric/software/SPOTL/spotl/working",
-    azimuth1=0.0,
-    azimuth2=270.0,
-    azimuth3=315.0,
-    files_basename="ocean_load_Ridgecrest_test",
+    files_basename="ocean_load_Japan_test",
     earth_green_function="gr.gbaver.wef.p02.ce",
     tidal_components=["k1", "m2", "s2", "n2"],
+    global_model="got4p7.2004",
 ):
-    """Compute strain from ocean tides.
+    """
+    Compute strain from ocean tides using SPOTL routines.
 
-    Compute the strain produced by the oceanic tides using a local
-    model of the Cortez sea, a regional west coast model and a global model.
+    This function generates a C-shell script to automate the calculation of 
+    ocean tide loading using the SPOTL (Some Programs for Ocean Tide Loading) 
+    software package. It handles polygon creation for local/global models, 
+    harmonic constants calculation, and time series generation for three 
+    different azimuths.
 
     Parameters
-    -----------
-    azimuth1: float, default to 0
-        Azimuth, angle from north in degrees, of first channel.
-    azimuth2: float, default to 270
-        Azimuth, angle from north in degrees, of second channel.
-    azimuth3: float, default to 315
-        Azimuth, angle from north in degrees, of third channel.
-    files_basename: string, default to 'solid_earth_tides_Ridgecrest'
-        Basename of all the files produced by SPOTL's routines.
+    ----------
+    station_name : str
+        Name of the virtual station.
+    station_longitude : float
+        Longitude of the station in decimal degrees.
+    station_latitude : float
+        Latitude of the station in decimal degrees.
+    station_elevation_m : float
+        Elevation of the station in meters.
+    year_start : int
+        Starting year for the tidal time series (e.g., 2023).
+    julday_start : int
+        Starting Julian day (day of year) for the time series.
+    n_periods : int
+        Number of samples to generate in the time series.
+    sample_time_sec : float or int
+        Sampling interval in seconds.
+    local_models : list of str
+        List of names of local ocean tide models to be used (e.g., ["naoregional.1999"]).
+    hour_start : int, optional
+        Starting hour for the time series (0-23). Default is 0.
+    minute_start : int, optional
+        Starting minute for the time series (0-59). Default is 0.
+    second_start : int, optional
+        Starting second for the time series (0-59). Default is 0.
+    working_dir : str, optional
+        Directory where SPOTL routines and model files are located. 
+        Defaults to a subpath within the ROOT directory.
+    azimuth1 : float, optional
+        Azimuth (angle from North in degrees) of the first channel. Default is 0.0.
+    azimuth2 : float, optional
+        Azimuth (angle from North in degrees) of the second channel. Default is 270.0.
+    azimuth3 : float, optional
+        Azimuth (angle from North in degrees) of the third channel. Default is 315.0.
+    files_basename : str, optional
+        Prefix for all temporary and output files generated by the script. 
+        Default is "ocean_load_Japan_test".
+    earth_green_function : str, optional
+        Filename of the Earth's Green function to be used. 
+        Default is "gr.gbaver.wef.p02.ce".
+    tidal_components : list of str, optional
+        List of tidal constituents to include (e.g., ["m2", "s2"]). 
+        Default is ["k1", "m2", "s2", "n2"].
+    global_model : str, optional
+        The global ocean tide model to use outside of local model areas. 
+        Default is "got4p7.2004".
 
+    Notes
+    -----
+    The function performs the following steps:
+    1. Changes the directory to `working_dir`.
+    2. Constructs a `.csh` script that calls `polymake`, `nloadf`, `loadcomb`, 
+       `harprp`, and `hartid`.
+    3. Executes the script using `os.system`.
+    4. Moves the resulting files back to the original working directory.
+
+    Requires the SPOTL software suite to be installed and accessible in the 
+    system path or specified working directory.
     """
     import glob
     from time import sleep
@@ -295,66 +218,98 @@ def ocean_load_example2(
     # go to target working dir
     os.chdir(working_dir)
     # list of models used in each sub-region
-    models = ["cortez.1976", "osu.usawest.2010", "got4p7.2004"]
-    polygons = ["poly1", "poly2", "poly3"]
+    #local_models = ["naoregional.1999", "osu.chinasea.2010"]
+    models = local_models + [global_model]
+    polygons = []
+    combined_file = f"{files_basename}_all_components.txt"
     # write the input shell file
     with open(files_basename + ".csh", "w") as fin:
         fin.write("#!/bin/csh\n")
-        # tides in Gulf of California (Sea of Cortez)
-        fin.write("polymake << EOF > poly1.tmp\n")
-        fin.write("+ cortez.1976\n")
-        fin.write("EOF\n")
-        # tides on US West coast
-        fin.write("polymake << EOF > poly2.tmp\n")
-        fin.write("- cortez.1976\n")
-        fin.write("+ osu.usawest.2010\n")
-        fin.write("EOF\n")
-        # global tides
-        fin.write("polymake << EOF > poly3.tmp\n")
-        fin.write("- cortez.1976\n")
-        fin.write("- osu.usawest.2010\n")
-        fin.write("EOF\n")
-        for i, comp in enumerate(tidal_components):
-            for poly, model in zip(polygons, models):
+
+        # -------------------------------------------
+        #          DEFINE POLYGONS
+        # -------------------------------------------
+        local_models_comp = {}
+        polygons_comp = {}
+        for c, comp in enumerate(tidal_components):
+            # check which models support the tidal component
+            local_models_comp[comp] = []
+            for mod in local_models:
+                if os.path.isfile(os.path.join(working_dir, f"{comp}.{mod}")):
+                    local_models_comp[comp].append(mod)
+
+            # polygons for local models
+            polygons_comp[comp] = []
+            for i, mod1 in enumerate(local_models_comp[comp]):
+                # build polygon
+                poly_name = f"poly{i+1}_{comp}"
+                fin.write(f"polymake << EOF > {poly_name}.tmp\n")
+                for j in range(i):
+                    # if i==0, this loop doesn't do anything
+                    fin.write(f"- {models[j]}\n")
+                fin.write(f"+ {mod1}\n")
+                fin.write("EOF\n")
+                # add polygon to list
+                polygons_comp[comp].append(poly_name)
+            # polygon for global model
+            poly_name = f"poly_global_{comp}"
+            fin.write(f"polymake << EOF > {poly_name}.tmp\n")
+            for i, mod in enumerate(local_models_comp[comp]):
+                fin.write(f"- {mod}\n")
+            # add global polygon to list
+            polygons_comp[comp].append(poly_name)
+            fin.write("EOF\n")
+            # -------------------------------------------
+
+
+            # -------------------------------------------
+            #   COMPUTE LOAD FOR EACH MODEL, COMPONENT AND POLYGON
+            # -------------------------------------------
+            for poly_name, model in zip(
+                    polygons_comp[comp], local_models_comp[comp] + [global_model]
+                    ):
+                # compute load for comp with model in poly
                 fin.write(
                     f"nloadf {station_name} {station_latitude} {station_longitude} "
                     f"{station_elevation_m} {comp}.{model} {earth_green_function} "
-                    f"l {poly}.tmp > {files_basename}_{poly}_{comp}.txt\n"
+                    f"l {poly_name}.tmp > {files_basename}_{poly_name}_{comp}.txt\n"
                 )
+
             # combine all polygons
-            fin.write(
-                    f"cat {files_basename}_{polygons[0]}_{comp}.txt "
-                    f"{files_basename}_{polygons[1]}_{comp}.txt | "
-                    f"loadcomb c > {files_basename}_tmp1.txt\n"
-                    )
-            fin.write(
-                    f"cat {files_basename}_tmp1.txt "
-                    f"{files_basename}_{polygons[2]}_{comp}.txt | "
-                    f"loadcomb c > {files_basename}_tmp2.txt\n"
-                    )
-            print(f"Adding {comp} to {files_basename}_all_components.txt...")
+            for i in range(len(polygons_comp[comp])-1):
+                if i == 0:
+                    file1 = f"{files_basename}_{polygons_comp[comp][i]}_{comp}.txt"
+                else:
+                    file1 = out_file
+                file2 = f"{files_basename}_{polygons_comp[comp][i+1]}_{comp}.txt"
+                out_file = f"{files_basename}_tmp{i+1}.txt"
+                fin.write(
+                        f"cat {file1} {file2} | loadcomb c > {out_file}\n"
+                        )
+
             # add this tidal component to others
-            if i == 0:
-                fin.write(
-                        f"cat {files_basename}_tmp2.txt > "
-                        f"{files_basename}_all_components.txt\n"
-                        )
+            print(f"Adding {comp} to {combined_file}...")
+            if os.path.isfile(combined_file):
+                fin.write(f"cat {out_file} > {combined_file}\n")
             else:
-                fin.write(
-                        f"cat {files_basename}_tmp2.txt >> "
-                        f"{files_basename}_all_components.txt\n"
-                        )
+                fin.write(f"cat {out_file} >> {combined_file}\n")
+
+        #print("=====================================")
+        #print(polygons_comp)
+        #print(local_models_comp)
+        #print("=====================================")
+
         # write the harmonic constants for extensional strain at given azimuths
         fin.write(
-            f"harprp l {azimuth1} < {files_basename}_all_components.txt > "
+            f"harprp l {azimuth1} < {combined_file} > "
             f"harprp_out_{files_basename}_az{azimuth1:.0f}.txt\n"
         )
         fin.write(
-            f"harprp l {azimuth2} < {files_basename}_all_components.txt > "
+            f"harprp l {azimuth2} < {combined_file} > "
             f"harprp_out_{files_basename}_az{azimuth2:.0f}.txt\n"
         )
         fin.write(
-            f"harprp l {azimuth3} < {files_basename}_all_components.txt > "
+            f"harprp l {azimuth3} < {combined_file} > "
             f"harprp_out_{files_basename}_az{azimuth3:.0f}.txt\n"
         )
         # use the harmonic constants to compute the time series
@@ -377,6 +332,73 @@ def ocean_load_example2(
             f"< harprp_out_{files_basename}_az{azimuth3:.0f}.txt "
             f"> tidal_series_{files_basename}_az{azimuth3:.0f}.txt\n"
         )
+    sleep(0.25)
+    # ready to run the script!
+    os.system(f"sh {files_basename}.csh")
+    sleep(0.5)
+    # save all full file names
+    filenames = glob.glob(f"*{files_basename}*")
+    folder = os.getcwd()
+    # go back to initial working directory and move files there
+    os.chdir(cwd)
+    for fn in filenames:
+        os.system(f"mv {os.path.join(folder, fn)} .")
+    print("Done!")
+
+def ocean_height(
+    station_name,
+    station_longitude,
+    station_latitude,
+    station_elevation_m,
+    year_start,
+    julday_start,
+    n_periods,
+    sample_time_sec,
+    hour_start=0,
+    minute_start=0,
+    second_start=0,
+    working_dir=os.path.join(ROOT, "software/SPOTL/spotl/working"),
+    files_basename="ocean_load_Japan_test",
+    tidal_components=["k1", "m2", "s2", "n2"],
+    model="got4p7.2004"
+        ):
+    """
+    """
+    import glob
+    from time import sleep
+
+    # keep current working directory in memory for later
+    cwd = os.getcwd()
+    # go to target working dir
+    os.chdir(working_dir)
+    # write the input shell file
+    with open(files_basename + ".csh", "w") as fin:
+        fin.write("#!/bin/csh\n")
+        first_cmd_line = True
+        for i, comp in enumerate(tidal_components):
+            # write load file for ocean height
+            symb = ">" if first_cmd_line else ">>"
+            if not os.path.isfile(os.path.join(working_dir, f"{comp}.{model}")):
+                print(f"Component {comp} not available in {model}!")
+                continue
+            fin.write(
+                    f"oclook {comp}.{model} {station_latitude} {station_longitude} "
+                    f"o {symb} {files_basename}_ocean_height.txt\n"
+                    )
+            first_cmd_line = False
+        # write ocean height
+        fin.write(
+            f"cat {files_basename}_ocean_height.txt | "
+            f"harprp o > harprp_out_{files_basename}_ocean_height.txt\n "
+        )
+        # use the harmonic constants to compute the time series
+        # of tidal (nano)strain
+        fin.write(
+            f"hartid {year_start:d} {julday_start:d} {hour_start:d} "
+            f"{minute_start:d} {second_start:d} {n_periods:d} {sample_time_sec} "
+            f"< harprp_out_{files_basename}_ocean_height.txt "
+            f"> tidal_series_{files_basename}_ocean_height.txt\n"
+        )
     # ready to run the script!
     os.system(f"sh {files_basename}.csh")
     # save all full file names
@@ -387,145 +409,3 @@ def ocean_load_example2(
     for fn in filenames:
         os.system(f"mv {os.path.join(folder, fn)} .")
     print("Done!")
-
-#def ocean_load(
-#    station_name,
-#    station_longitude,
-#    station_latitude,
-#    station_elevation_m,
-#    year_start,
-#    julday_start,
-#    n_periods,
-#    sample_time_sec,
-#    hour_start=0,
-#    minute_start=0,
-#    second_start=0,
-#    working_dir="/home/eric/software/SPOTL/spotl/working",
-#    azimuth1=0.0,
-#    azimuth2=270.0,
-#    azimuth3=315.0,
-#    files_basename="ocean_load_Ridgecrest_test",
-#    global_ocean_model="got4p7.2004",
-#    earth_green_function="gr.gbaver.wef.p02.ce",
-#    tidal_components=["o1", "p1", "k1", "m2", "s2"],
-#):
-#    """Compute strain from ocean tides.
-#
-#    Parameters
-#    -----------
-#    azimuth1: float, default to 0
-#        Azimuth, angle from north in degrees, of first channel.
-#    azimuth2: float, default to 270
-#        Azimuth, angle from north in degrees, of second channel.
-#    azimuth3: float, default to 315
-#        Azimuth, angle from north in degrees, of third channel.
-#    files_basename: string, default to 'solid_earth_tides_Ridgecrest'
-#        Basename of all the files produced by SPOTL's routines.
-#
-#    """
-#    import glob
-#    from time import sleep
-#
-#    # keep current working directory in memory for later
-#    cwd = os.getcwd()
-#    # go to target working dir
-#    os.chdir(working_dir)
-#    # write the input shell file
-#    with open(files_basename + ".csh", "w") as fin:
-#        fin.write("#!/bin/csh\n")
-#        fin.write("polymake << EOF > poly.tmp\n")
-#        fin.write("- cortez.1976\n")
-#        fin.write("EOF\n")
-#        for i, comp in enumerate(tidal_components):
-#            fin.write(
-#                f"nloadf {station_name} {station_latitude} {station_longitude} "
-#                f"{station_elevation_m} {comp}.{global_ocean_model} {earth_green_function} "
-#                f"l poly.tmp > {files_basename}_no_Gulf_{comp}.txt\n"
-#            )
-#            fin.write(
-#                f"nloadf {station_name} {station_latitude} {station_longitude} "
-#                f"{station_elevation_m} {comp}.cortez.1976 {earth_green_function} "
-#                f"l poly.tmp > {files_basename}_only_Gulf_{comp}.txt\n"
-#            )
-#            fin.write(
-#                f"cat {files_basename}_no_Gulf_{comp}.txt "
-#                f"{files_basename}_only_Gulf_{comp}.txt | "
-#                f"loadcomb c > {files_basename}_{comp}.txt\n"
-#            )
-#
-#            if i == 0:
-#                os.system(f"cp {files_basename}_{comp}.txt {files_basename}.txt\n")
-#            else:
-#                fin.write(
-#                    f"cat {files_basename}_{comp}.txt {files_basename}.txt "
-#                    f"| loadcomb c > {files_basename}.txt\n"
-#                )
-#        # write the harmonic constants for extensional strain at given azimuths
-#        fin.write(
-#            f"harprp l {azimuth1} < {files_basename}.txt > "
-#            f"harprp_out_{files_basename}_az{azimuth1:.0f}.txt\n"
-#        )
-#        fin.write(
-#            f"harprp l {azimuth2} < {files_basename}.txt > "
-#            f"harprp_out_{files_basename}_az{azimuth2:.0f}.txt\n"
-#        )
-#        fin.write(
-#            f"harprp l {azimuth3} < {files_basename}.txt > "
-#            f"harprp_out_{files_basename}_az{azimuth3:.0f}.txt\n"
-#        )
-#        # use the harmonic constants to compute the time series
-#        # of tidal (nano)strain
-#        fin.write(
-#            f"hartid {year_start:d} {julday_start:d} {hour_start:d} "
-#            f"{minute_start:d} {second_start:d} {n_periods:d} {sample_time_sec} "
-#            f"< harprp_out_{files_basename}_az{azimuth1:.0f}.txt "
-#            f"> tidal_series_{files_basename}_az{azimuth1:.0f}.txt\n"
-#        )
-#        fin.write(
-#            f"hartid {year_start:d} {julday_start:d} {hour_start:d} "
-#            f"{minute_start:d} {second_start:d} {n_periods:d} {sample_time_sec} "
-#            f"< harprp_out_{files_basename}_az{azimuth2:.0f}.txt "
-#            f"> tidal_series_{files_basename}_az{azimuth2:.0f}.txt\n"
-#        )
-#        fin.write(
-#            f"hartid {year_start:d} {julday_start:d} {hour_start:d} "
-#            f"{minute_start:d} {second_start:d} {n_periods:d} {sample_time_sec} "
-#            f"< harprp_out_{files_basename}_az{azimuth3:.0f}.txt "
-#            f"> tidal_series_{files_basename}_az{azimuth3:.0f}.txt\n"
-#        )
-#    # ready to run the script!
-#    os.system(f"sh {files_basename}.csh")
-#    # save all full file names
-#    filenames = glob.glob(f"*{files_basename}*")
-#    folder = os.getcwd()
-#    # go back to initial working directory and move files there
-#    os.chdir(cwd)
-#    for fn in filenames:
-#        os.system(f"mv {os.path.join(folder, fn)} .")
-#    print("Done!")
-
-def get_strain_tensor(azimuth_0, azimuth_270, azimuth_315, poisson=0.25, scale=1.e-9):
-    """Compute the strain tensor from N, W, and NW strains
-    in the (north, west, up) basis.
-    """
-    # convert to strain
-    azimuth_0 = azimuth_0 * scale
-    azimuth_270 = azimuth_270 * scale
-    azimuth_315 = azimuth_315 * scale
-    # 
-    e_xy = azimuth_315 - (azimuth_0 + azimuth_270) / 2.
-    constant = -poisson / (1. - poisson)
-    e_zz = constant * (azimuth_0 + azimuth_270)
-    # full tensor
-    zeros = np.zeros_like(azimuth_0)
-    e_ij = np.array(
-            (
-                [azimuth_0, e_xy, zeros],
-                [e_xy, azimuth_270, zeros],
-                [zeros, zeros, e_zz]
-                )
-            )
-    return e_ij
-
-
-
