@@ -184,7 +184,6 @@ class Modulationmeter(ABC):
         If `forcing_name` is not found in `self.modulation` or `self.model`, a warning is issued,
         and `None` is returned for all outputs.
         """
-
         if forcing_name not in self.modulation:
             warnings.warn(f"{forcing_name} not in self.modulation")
             return
@@ -195,11 +194,15 @@ class Modulationmeter(ABC):
         for t in self.modulation[forcing_name]:
             time.append(t)
         time.sort()
-        performance_metrics = {"delta_aic": [], "rms_residual": []}
+        performance_metrics = {
+                "delta_aic": [],
+                "rms_residual": [],
+                "r2": []
+                }
         for t in time:
             _mod = self.model[forcing_name][t][model_name]
-            performance_metrics["delta_aic"].append(_mod["delta_aic"])
-            performance_metrics["rms_residual"].append(_mod["rms_residual"])
+            for param in performance_metrics.keys():
+                performance_metrics[param].append(_mod[param])
         for param in performance_metrics:
             performance_metrics[param] = np.asarray(performance_metrics[param])
         return time, performance_metrics
@@ -250,7 +253,7 @@ class Modulationmeter(ABC):
             **kwargs,
         )
 
-    def evaluate_aic(
+    def evaluate_goodnessoffit(
         self, window_time, forcing_name, quantity="relative_rate", model_name="model1"
     ):
         """ """
@@ -287,6 +290,14 @@ class Modulationmeter(ABC):
         self.model[forcing_name][window_time][model_name]["rms_residual"] = np.std(
             residuals_proposed_model
         )
+        self.model[forcing_name][window_time][model_name]["variance_reduction"] = (
+                100. * (1. - np.sum(residuals_proposed_model**2) / np.sum(obs**2))
+                )
+        obs_c = obs - obs.mean()
+        self.model[forcing_name][window_time][model_name]["r2"] = (
+                100. * (1. - np.sum(residuals_proposed_model**2) / np.sum(obs_c**2))
+                )
+
 
     def set_catalog(self, catalog):
         if catalog is None:
