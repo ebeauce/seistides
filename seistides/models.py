@@ -177,9 +177,25 @@ def fit_relative_rate_vs_phase(
         weights = np.ones(len(y_err))
     weights /= weights.sum()
 
+    # tried a covariance formalism but did not work
+    #cc = np.eye(len(x))
+    #for i in range(len(x)):
+    #    for k in range(bin_extension):
+    #        cc[i, i-k] = 1. - k / bin_extension
+    #        cc[i, (i+k)%len(x)] = 1. - k / bin_extension
+    #cov = np.diag(
+    #        #np.clip(y_err, a_min=np.percentile(y_err, 2.5), a_max=np.percentile(y_err, 97.5))**2
+    #        np.clip(y_err, a_min=np.percentile(y_err, 25.), a_max=np.percentile(y_err, 75.))**2
+    #        ) @ cc
+    #cov_inv = np.linalg.pinv(cov)
+
     if objective == "l2":
         # l2-norm
-        loss = lambda p, obs: np.sum(weights * (_model(x_, *p) - obs) ** 2)
+        loss = lambda p, obs: np.sum(weights**2 * (_model(x_, *p) - obs) ** 2)
+        #def loss(p, obs):
+        #    res = _model(x_, *p) - obs
+        #    return (res[None, :] @ cov_inv @ res[:, None])[0, 0]
+
     elif objective == "l1":
         # l1-norm
         loss = lambda p, obs: np.sum(weights * np.abs(_model(x_, *p) - obs))
@@ -227,14 +243,19 @@ def fit_relative_rate_vs_phase(
     # --------------------------------
     #      fit perturbed measurements
     n = 0
+    # since the process is closer to a log-normal process,
+    # estimate std of log-normal process
+    y_log_err = np.sqrt(np.log(1. + y_err**2))
+    y_log = np.log(y)
     while n < num_resamplings:
-        # generate random sample assuming that each bin [i] of the histogram
-        # is normally distributed with mean y[i] and std y_err[i]
-        y_b = np.random.normal(loc=0.0, scale=1.0, size=len(y))
-        # noisy y
-        y_b = y_b * y_err + y
-        # don't allow negative values (impossible)
-        y_b = np.maximum(y_b, 0.0)
+        ## generate random sample assuming that each bin [i] of the histogram
+        ## is normally distributed with mean y[i] and std y_err[i]
+        #y_b = np.random.normal(loc=0.0, scale=1.0, size=len(y))
+        ## noisy y
+        #y_b = y_b * y_err + y
+        ## don't allow negative values (impossible)
+        #y_b = np.maximum(y_b, 0.0)
+        y_b = np.exp(y_log + np.random.normal(loc=0., scale=y_log_err))
         optimization_results = minimize(
             loss,
             first_guess,
