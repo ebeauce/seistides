@@ -368,6 +368,7 @@ def composite_rate_estimate(
     short_window_shift = relativedelta(days=int((1.0 - overlap) * short_window_days))
     min_num_valid_short_windows = int(min_fraction_of_valid_windows * num_short_windows)
     seismicity_vs_forcing_short_win = []
+    num_overlapping_windows = int(1. / (1. - overlap))
 
     if window_type == "backward":
         t_end = window_time
@@ -544,7 +545,8 @@ def composite_rate_estimate(
                 seismicity_vs_forcing[field],
                 seismicity_vs_forcing[f"{field}_err"],
             ) = bootstrap_statistic(
-                all_windows, operator, n_bootstraps=num_bootstrap_for_errors
+                all_windows, operator, n_bootstraps=num_bootstrap_for_errors,
+                n_contiguous=num_overlapping_windows
             )
         else:
             seismicity_vs_forcing[field] = operator(all_windows)
