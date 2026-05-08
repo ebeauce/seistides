@@ -354,7 +354,7 @@ def composite_rate_estimate(
         # operator = partial(np.ma.mean, axis=-1)
         operator = partial(np.mean, axis=-1, **aggregate_kwargs)
         pulling_operator = np.mean
-        err_operator = partial(np.mean, axis=-1)
+        err_operator = partial(np.std, axis=-1)
     elif aggregate == "svd":
         operator = partial(get_singular_vector3, **aggregate_kwargs)
         pulling_operator = np.mean
@@ -572,7 +572,7 @@ def composite_rate_estimate(
         return seismicity_vs_forcing
 
 
-def bootstrap_statistic(x, operator, n_bootstraps=100):
+def bootstrap_statistic(x, operator, n_bootstraps=100, n_contiguous=0):
     """
     Estimate the mean and standard deviation of an operator applied to
     bootstrapped samples of data.
@@ -603,11 +603,22 @@ def bootstrap_statistic(x, operator, n_bootstraps=100):
     else:
         instances = np.zeros(n_bootstraps, dtype=np.float32)
 
-    for i in range(n_bootstraps):
-        replica = np.take(
-            x, np.random.randint(0, x.shape[-1] - 1, size=x.shape[-1]), axis=-1
-        )
-        instances[i] = operator(replica)
+    if n_contiguous == 0:
+        for i in range(n_bootstraps):
+            replica = np.take(
+                x, np.random.randint(0, x.shape[-1] - 1, size=x.shape[-1]), axis=-1
+            )
+            instances[i] = operator(replica)
+    else:
+        block_indexes = np.arange(x.shape[-1]) // n_contiguous
+        unique_block_ind = np.unique(block_indexes)
+        for i in range(n_bootstraps):
+            _indexes = np.random.randint(
+                    0, unique_block_ind.max(), size=len(unique_block_ind)
+                    )
+            replica = x[:, np.isin(block_indexes, _indexes)]
+            instances[i] = operator(replica)
+
     return np.mean(instances, axis=0), np.std(instances, axis=0)
 
 
@@ -838,6 +849,8 @@ def compute_instantaneous_phase_at_eq(
     """Interpolate instantaneous phase at earthquake timings."""
     eq_timings = catalog.loc[:, "t_eq_s"].values
     for field in fields:
+        if field in catalog.columns:
+            catalog.drop(field, axis=1, inplace=True)
         if f"unravelled_{field}" in tidal_stress:
             # catalog.loc[indexes, field] = (
             #    np.interp(
@@ -883,29 +896,6 @@ def compute_instantaneous_phase_at_eq(
     return catalog
 
 
-# def unravel_phase(phases, degree=True):
-#     """
-#     """
-#     if not degree:
-#         phases = np.rad2deg(phases)
-#     # 1) differentiate phases
-#     dphase = phases[1:] - phases[:-1]
-#     dphase_plus_360 = 360. + phases[1:] - phases[:-1]
-#     dphase_minus_360 = -360. + phases[1:] - phases[:-1]
-#     dphase = np.maximum(
-#         dphase, dphase_plus_360, out=dphase, where=np.abs(dphase_plus_360) < np.abs(dphase)
-#     )
-#     dphase = np.minimum(
-#         dphase, dphase_minus_360, out=dphase, where=np.abs(dphase_minus_360) < np.abs(dphase)
-#     )
-#     if not degree:
-#         dphase = np.deg2rad(dphase)
-#     # convert dphase to float64 in case it is not
-#     # otherwise, error will accumulates in cumsum
-#     return phases[0] + np.hstack( (0., np.cumsum(dphase.astype("float64"))) )
-#     # return phases[0] + np.hstack( (0., np.cumsum(dphase)) )
-
-
 def unravel_phase(phases, degree=True):
     """ """
     phases = np.float64(phases)
@@ -920,6 +910,8 @@ def compute_stress_at_eq(catalog, tidal_stress, fields):
     # indexes = catalog.index
     eq_timings = catalog.loc[:, "t_eq_s"].values
     for f in fields:
+        if f in catalog.columns:
+            catalog.drop(f, axis=1, inplace=True)
         catalog = catalog.assign(
             f=np.interp(
                 eq_timings,
@@ -1148,12 +1140,14 @@ def svd_filtering(x, reconstruction_factor=0.66):
     x : numpy.ndarray
         (num_bins, num_windows) ndarray.
     """
-    V, S, Ut, weights = _svd_w_robust_ordering(x - 1.0)
+    #mu = 1.0
+    mu = x.mean()
+    V, S, Ut, weights = _svd_w_robust_ordering(x - mu)
 
     first_above_threshold = np.where(np.cumsum(weights) >= reconstruction_factor)[0][0]
     indexes = np.arange(first_above_threshold + 1)
 
-    return 1.0 + V[:, indexes] @ np.diag(S[indexes]) @ Ut[indexes, :]
+    return mu + V[:, indexes] @ np.diag(S[indexes]) @ Ut[indexes, :]
 
 
 def get_singular_vector3(x, reconstruction_factor=0.66):
