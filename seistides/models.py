@@ -248,13 +248,6 @@ def fit_relative_rate_vs_phase(
     y_log_err = np.sqrt(np.log(1. + y_err**2))
     y_log = np.log(y)
     while n < num_resamplings:
-        ## generate random sample assuming that each bin [i] of the histogram
-        ## is normally distributed with mean y[i] and std y_err[i]
-        #y_b = np.random.normal(loc=0.0, scale=1.0, size=len(y))
-        ## noisy y
-        #y_b = y_b * y_err + y
-        ## don't allow negative values (impossible)
-        #y_b = np.maximum(y_b, 0.0)
         y_b = np.exp(y_log + np.random.normal(loc=0., scale=y_log_err))
         optimization_results = minimize(
             loss,
@@ -429,20 +422,18 @@ def fit_relative_rate_vs_stress_rate_state(
     weights /= weights.sum()
 
     inverted_Asig_Pa = np.zeros(num_resamplings, dtype=np.float32)
+    # since the process is closer to a log-normal process,
+    # estimate std of log-normal process
+    y_log_err = np.sqrt(np.log(1. + y_err**2))
+    y_log = np.log(y)
     for n in range(num_resamplings):
-        # generate random sample assuming that each bin [i] of the histogram
-        # is normally distributed with mean y[i] and std y_err[i]
-        y_b = np.random.normal(loc=0.0, scale=1.0, size=len(y))
-        # noisy y
-        y_b = y_b * y_err + y
-        # don't allow negative values (impossible)
-        y_b = np.maximum(y_b, 0.0001)
+        y_log_b = y_log + np.random.normal(loc=0., scale=y_log_err)
         # convert data to log and fit linear function
         # note: inverting for a non-trivial intercept corrects
         # for possible errors when finding the reference rate
         # at sigma=0   :)
         # slope, intercept, r, p, se = linregress(x, np.log(y_b))
-        slope, intercept, se = weighted_linear_regression(x, np.log(y_b), W=weights)
+        slope, intercept, se = weighted_linear_regression(x, y_log_b, W=weights)
         inverted_Asig_Pa[n] = 1.0 / slope
 
     model_parameters = {
