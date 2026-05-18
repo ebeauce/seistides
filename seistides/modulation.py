@@ -502,42 +502,15 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
 
                 correction = transition_times - forcingtime_bin_starttime_sec
 
-                # diff = np.diff(transition_times)
-                # diff = np.hstack((0., diff))
-                # argprob = diff.argmin()
-                # time_problem = pd.Timestamp(forcingtime_bin_starttime_sec[argprob], unit="s")
-                # print(
-                #        forcing_name,
-                #        diff.min(),
-                #        time_problem,
-                #        pd.Timestamp(transition_times[argprob], unit="s"),
-                #        transition_times[argprob],
-                #        self.forcing.loc[time_problem, forcing_name],
-                #        self.forcing.loc[time_problem, "shear_stress"],
-                #        dforcing[argprob - 1]
-                #        )
-                # print(correction[:20])
-                # print(
-                #        forcingtime_bin_starttime_sec[:10] - forcingtime_bin_starttime_sec[0],
-                #        transition_times[:10] - transition_times[0]
-                #        )
-
                 forcingtime_bin_starttime_sec = transition_times
 
             forcingtime_bin_duration_sec = (
                 forcingtime_bin_starttime_sec[1:] - forcingtime_bin_starttime_sec[:-1]
             )
             forcingtime_bins = {
-                # "forcing_bin_membership": np.hstack(
-                #    (pd.NA, forcing_bin_membership[jumps_after][:-1])
-                # ),
-                # "forcing_bin_membership": np.hstack(
-                #    (forcing_bin_membership[jumps_after][:-1], pd.NA)
-                # ),
                 "forcing_bin_membership": forcing_bin_membership[jumps_after],
                 "forcingtime_bin_starttime_sec": forcingtime_bin_starttime_sec,
                 "forcingtime_bin_duration_sec": np.hstack(
-                    # (np.nan, forcingtime_bin_duration_sec)
                     (forcingtime_bin_duration_sec, np.nan)
                 ),
             }
@@ -895,6 +868,7 @@ class ModulationmeterMultiWindowForcingTimeBins(
 
         if forcing_name not in self.modulation:
             self.modulation[forcing_name] = {}
+
         self.modulation[forcing_name][window_time] = modulation
         self.modulation[forcing_name][window_time]["midbins"] = self._midbins(
             self.modulation[forcing_name][window_time]["bins"]

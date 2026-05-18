@@ -149,10 +149,22 @@ def fit_relative_rate_vs_phase(
         proportionally to the error in the relative rate of seismicity, that is,
         to `y_err`. Errors are first clipped between the 2.5th and 97.5th percentile
         for numerical stability. Defaults to False.
+
+    Returns
+    -------
+    dict
+        Dictionary with following fields:
+        - 'parameters': The values of the inverted parameters.
+        - 'errors': The uncertainties on the inverted parameters.
+        - 'func': An operator func(x) that returns the values of 
+                  the modulation model at phases `x`.
     """
     from scipy.optimize import minimize
 
     assert model in {"cosine", "exp"}, "model should be either of 'cosine' or 'exp'"
+    valid_objective = {"l1", "l2"}
+    if objective not in valid_objective:
+        raise ValueError(f"Invalid 'objective'. Should be one of {valid_objective}")
 
     deg2rad = np.pi / 180.0
     x_ = x * deg2rad
@@ -191,11 +203,11 @@ def fit_relative_rate_vs_phase(
 
     if objective == "l2":
         # l2-norm
-        loss = lambda p, obs: np.sum(weights**2 * (_model(x_, *p) - obs) ** 2)
+        #loss = lambda p, obs: np.sum(weights**2 * (_model(x_, *p) - obs) ** 2)
+        loss = lambda p, obs: np.sum(weights * (_model(x_, *p) - obs) ** 2)
         #def loss(p, obs):
         #    res = _model(x_, *p) - obs
         #    return (res[None, :] @ cov_inv @ res[:, None])[0, 0]
-
     elif objective == "l1":
         # l1-norm
         loss = lambda p, obs: np.sum(weights * np.abs(_model(x_, *p) - obs))
@@ -340,9 +352,33 @@ def fit_relative_rate_vs_stress_linear(
     y_err_min=0.0,
     use_err_for_weights=False,
 ):
-    """Least squares solution for linear regression.
+    """
+    Fit the relative rate of seismicity as a function of stress amplitude with empirical model.
 
-    This routine uses scipy.stats's linregress function.
+    Parameters:
+    -----------
+    x : array-like
+        `num_phases` list or array of tidal stresses, in Pascal.
+    y : array-like
+        `num_phases` list or array of relative rate of seismicity.
+    y_err : array-like
+        `num_phases` list or array of uncertainties on relative rate of seismicity.
+    y_err_min : float or numpy.ndarray, optional
+        Errors are clipped such that `y_err >= y_err_min`. Defaults to 0.
+    use_err_for_weights : bool, optional
+        If True, the tidal phases contribute to the objective function inversely
+        proportionally to the error in the relative rate of seismicity, that is,
+        to `y_err`. Errors are first clipped between the 2.5th and 97.5th percentile
+        for numerical stability. Defaults to False.
+
+    Returns:
+    --------
+    dict
+        Dictionary with following fields:
+        - 'parameters': The values of the inverted parameters.
+        - 'errors': The uncertainties on the inverted parameters.
+        - 'func': An operator func(x) that returns the values of 
+                  the modulation model at stresses `x`.
     """
     from scipy.stats import linregress, t
 
@@ -386,25 +422,31 @@ def fit_relative_rate_vs_stress_rate_state(
 
     Parameters:
     -----------
-    x : numpy.ndarray
-        Independent variable representing data.
-
-    y : numpy.ndarray
-        Dependent variable representing a corresponding response.
-
-    y_err : numpy.ndarray
-        Error values associated with the dependent variable y.
-
-    num_bootstraps : int, optional
-        The number of bootstrap resamples to generate (default is 100).
+    x : array-like
+        `num_phases` list or array of tidal stresses, in Pascal.
+    y : array-like
+        `num_phases` list or array of relative rate of seismicity.
+    y_err : array-like
+        `num_phases` list or array of uncertainties on relative rate of seismicity.
+    num_resamplings : int, optional
+        Number of random samples drawn from N(mean=y, std=y_err) used to propagate
+        measurement uncertainties into modeling uncertainties. Defaults to 10.
+    y_err_min : float or numpy.ndarray, optional
+        Errors are clipped such that `y_err >= y_err_min`. Defaults to 0.
+    use_err_for_weights : bool, optional
+        If True, the tidal phases contribute to the objective function inversely
+        proportionally to the error in the relative rate of seismicity, that is,
+        to `y_err`. Errors are first clipped between the 2.5th and 97.5th percentile
+        for numerical stability. Defaults to False.
 
     Returns:
     --------
-    float
-        The median of the optimized parameter for the rate-state model from bootstrapping.
-
-    float
-        The robust uncertainty estimate for the parameter.
+    dict
+        Dictionary with following fields:
+        - 'parameters': The values of the inverted parameters.
+        - 'errors': The uncertainties on the inverted parameters.
+        - 'func': An operator func(x) that returns the values of 
+                  the modulation model at stresses `x`.
     """
     from scipy.optimize import minimize_scalar
     from scipy.stats import linregress
