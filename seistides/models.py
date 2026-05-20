@@ -50,33 +50,56 @@ def weighted_linear_regression(X, Y, W=None):
 #           Fit rate ratio vs phase
 # ----------------------------------------------------------
 
+
 def _modulo(x, rad=True):
-    x = (x + np.pi) % (2. * np.pi) - np.pi
+    x = (x + np.pi) % (2.0 * np.pi) - np.pi
     return x
 
-def cosine_rate_ratio(x, alpha, phi, C=1., log=False):
+
+def cosine_rate_ratio(x, alpha, phi, C=1.0, log=False):
     if log:
         return np.log(C * (1.0 + alpha * np.cos(x - phi)))
     else:
         return C * (1.0 + alpha * np.cos(x - phi))
 
-def exp_rate_ratio(x, alpha, phi, C=1., log=False):
+
+def exp_rate_ratio(x, alpha, phi, C=1.0, log=False):
     phi = _modulo(phi)
-    if log and C ==1:
+    if log and C == 1:
         return alpha * np.cos(x - phi)
     elif log:
         return np.log(C) + alpha * np.cos(x - phi)
     else:
         return C * np.exp(alpha * np.cos(x - phi))
 
+def exp_rate_ratio2(x, alpha, phi, C=1.0, log=False):
+    phi = _modulo(phi)
+    if log and C == 1:
+        out = alpha * np.cos(x - phi)
+    elif log:
+        out = np.log(C) + alpha * np.cos(x - phi)
+    else:
+        out = C * np.exp(alpha * np.cos(x - phi))
+        out /= out.mean()
+    return out
+
+def exp_rate_ratio_log(x, alpha, phi_0, C=1.):
+    phi_0 = _modulo(phi_0)
+    if C == 1.:
+        return alpha * np.cos(x - phi_0)
+    else:
+        return np.log(C) + alpha * np.cos(x - phi_0)
+
+
 def _check_if_at_bound(p, bounds):
     if len(np.atleast_1d(p)) > 1:
         at_bound = np.any(
-                [(p[i] == bounds[i][0]) | (p[i] == bounds[i][1]) for i in range(len(p))]
-                )
+            [(p[i] == bounds[i][0]) | (p[i] == bounds[i][1]) for i in range(len(p))]
+        )
     else:
         at_bound = (p == bounds[0]) | (p == bounds[1])
     return at_bound
+
 
 def _analytical_cosine_fit(r, phase):
     """Analytical fit of cosine model based on Fourier transform.
@@ -97,73 +120,138 @@ def _analytical_cosine_fit(r, phase):
     """
     # harmonic component at frequency of 1 tidal cycle
     dphi = phase[1] - phase[0]
-    R = np.sum((r - 1.) * np.exp(1.j * phase)) * dphi
+    R = np.sum((r - 1.0) * np.exp(1.0j * phase)) * dphi
     phi_0 = np.angle(R)
-    alpha_0 = np.abs(R) / (2. * np.pi) # because FT is defined in terms of phase
+    alpha_0 = np.abs(R) / (2.0 * np.pi)  # because FT is defined in terms of phase
     return alpha_0, phi_0
 
 
-def fit_relative_rate_vs_phase_bootstrap(
-    x, y, y_err,
-    num_bootstraps=10,
+def fit_relative_rate_vs_phase(
+    x,
+    y,
+    y_err,
+    num_resamplings=10,
     objective="l2",
     model="cosine",
-    y_err_min=0.,
-    invert_norm=False
+    invert_norm=False,
+    y_err_min=0.0,
+    use_err_for_weights=False,
 ):
-    """ """
+    """Fit the relative rate of seismicity as a function of phase with bootstrap uncertainties.
+
+    Parameters
+    ----------
+    x : array-like
+        `num_phases` list or array of tidal phases, in degrees.
+    y : array-like
+        `num_phases` list or array of relative rate of seismicity.
+    y_err : array-like
+        `num_phases` list or array of uncertainties on relative rate of seismicity.
+    num_resamplings : int, optional
+        Number of random samples drawn from N(mean=y, std=y_err) used to propagate
+        measurement uncertainties into modeling uncertainties. Defaults to 10.
+    objective : str, optional
+        Objective function. Either of 'l2', 'l1'. Defaults to `l2`.
+    model : str, optional
+        Model of relative rate of seismicity. Either of `cosine` or `exp`.
+        Defaults to `cosine`.
+        - `cosine`: model(x; alpha, phi_0) = 1 + alpha x cos(phi - phi_0)
+        - `exp`: model(x; alpha, phi_0) = exp(alpha x cos(phi - phi_0) )
+    invert_norm : bool, optional
+        If True, the model takes a third parameter, which is an amplitude scaling factor.
+        Defaults to False (and should probably be kept False).
+    y_err_min : float or numpy.ndarray, optional
+        Errors are clipped such that `y_err >= y_err_min`. Defaults to 0.
+    use_err_for_weights : bool, optional
+        If True, the tidal phases contribute to the objective function inversely
+        proportionally to the error in the relative rate of seismicity, that is,
+        to `y_err`. Errors are first clipped between the 2.5th and 97.5th percentile
+        for numerical stability. Defaults to False.
+
+    Returns
+    -------
+    dict
+        Dictionary with following fields:
+        - 'parameters': The values of the inverted parameters.
+        - 'errors': The uncertainties on the inverted parameters.
+        - 'func': An operator func(x) that returns the values of 
+                  the modulation model at phases `x`.
+    """
     from scipy.optimize import minimize
 
     assert model in {"cosine", "exp"}, "model should be either of 'cosine' or 'exp'"
+    valid_objective = {"l1", "l2"}
+    if objective not in valid_objective:
+        raise ValueError(f"Invalid 'objective'. Should be one of {valid_objective}")
 
     deg2rad = np.pi / 180.0
     x_ = x * deg2rad
+    y_log = np.log(y)
+    y_log_mean = y_log.mean()
 
     if model == "cosine":
         _model = cosine_rate_ratio
         bounds = [(0.0, 1.0), (-np.pi, np.pi)]
     elif model == "exp":
-        _model = exp_rate_ratio
+        _model = exp_rate_ratio_log
+        y_log = y_log - y_log_mean
         bounds = [(0.0, 10.0), (-np.pi, np.pi)]
     if invert_norm:
-        bounds = bounds + [(0., 10.)]
+        bounds = bounds + [(0.0, 10.0)]
+
+    y_err = np.maximum(y_err, y_err_min)
+
+    if use_err_for_weights:
+        weights = np.clip(
+            y_err, a_min=np.percentile(y_err, 2.5), a_max=np.percentile(y_err, 97.5)
+        )
+        weights = 1.0 / weights
+    else:
+        weights = np.ones(len(y_err))
+    weights /= weights.sum()
+
+    # tried a covariance formalism but did not work
+    #cc = np.eye(len(x))
+    #for i in range(len(x)):
+    #    for k in range(bin_extension):
+    #        cc[i, i-k] = 1. - k / bin_extension
+    #        cc[i, (i+k)%len(x)] = 1. - k / bin_extension
+    #cov = np.diag(
+    #        #np.clip(y_err, a_min=np.percentile(y_err, 2.5), a_max=np.percentile(y_err, 97.5))**2
+    #        np.clip(y_err, a_min=np.percentile(y_err, 25.), a_max=np.percentile(y_err, 75.))**2
+    #        ) @ cc
+    #cov_inv = np.linalg.pinv(cov)
 
     if objective == "l2":
         # l2-norm
-        loss = lambda p, obs: np.sum((_model(x_, *p) - obs) ** 2)
+        #loss = lambda p, obs: np.sum(weights**2 * (_model(x_, *p) - obs) ** 2)
+        loss = lambda p, obs: np.sum(weights * (_model(x_, *p) - obs) ** 2)
+        #def loss(p, obs):
+        #    res = _model(x_, *p) - obs
+        #    return (res[None, :] @ cov_inv @ res[:, None])[0, 0]
     elif objective == "l1":
         # l1-norm
-        loss = lambda p, obs: np.sum(np.abs(_model(x_, *p) - obs))
-    elif objective == "negative-log-likelihood":
-        # negative log-likelihood
-        loss = lambda p, obs: -np.sum(obs * np.log(_model(x_, *p)))
+        loss = lambda p, obs: np.sum(weights * np.abs(_model(x_, *p) - obs))
 
-    #if model == "exp":
-    #    __model = partial(exp_rate_ratio, log=True)
-    #    loss = lambda p, obs: np.sum(
-    #            ( __model(x_, *p) - np.log(obs) ) ** 2
-    #            )
-
-    inverted_alpha = np.zeros(num_bootstraps + 1, dtype=np.float32)
-    inverted_phi = np.zeros(num_bootstraps + 1, dtype=np.float32)
+    inverted_alpha = np.zeros(num_resamplings + 1, dtype=np.float32)
+    inverted_phi = np.zeros(num_resamplings + 1, dtype=np.float32)
     if invert_norm:
-        inverted_C = np.zeros(num_bootstraps + 1, dtype=np.float32)
+        inverted_C = np.zeros(num_resamplings + 1, dtype=np.float32)
 
-    #method = "TNC"
     method = "L-BFGS-B"
     # --------------------------------
     #      fit original measurement
     success = False
     first_guess = _analytical_cosine_fit(y, x_)
-    #print(first_guess)
+    # first_guess = (0.01, 0.)
     while not success:
         if invert_norm:
             first_guess = first_guess + (np.mean(y),)
         optimization_results = minimize(
             loss,
             first_guess,
-            args=(y),
-            #method=method,
+            args=(y_log) if model == "exp" else (y),
+            # method=method,
             bounds=bounds,  # jac="3-point"
         )
         if _check_if_at_bound(optimization_results.x, bounds):
@@ -172,7 +260,6 @@ def fit_relative_rate_vs_phase_bootstrap(
             success = optimization_results.success
         first_guess = (
             0.01 + 0.05 * np.random.random(),
-            #np.random.uniform(low=-0.75 * np.pi, high=0.75 * np.pi),
             np.random.uniform(low=-np.pi, high=np.pi),
         )
 
@@ -186,28 +273,16 @@ def fit_relative_rate_vs_phase_bootstrap(
     # --------------------------------
     #      fit perturbed measurements
     n = 0
-    while n < num_bootstraps:
-        # generate random sample assuming that each bin [i] of the histogram
-        # is normally distributed with mean y[i] and std y_err[i]
-        y_b = np.random.normal(loc=0.0, scale=1.0, size=len(y))
-        # noisy y
-        y_b = y_b * np.maximum(y_err, y_err_min) + y
-        # don't allow negative values (impossible)
-        y_b = np.maximum(y_b, 0.0)
-        # normalized noisy y
-        #y_b = y_b / np.mean(y_b)
-        #y_b = y_b / np.median(y_b)
-        #first_guess = (
-        #    0.01 + 0.05 * np.random.random(),
-        #    np.random.uniform(low=-0.75*np.pi, high=0.75*np.pi),
-        #)
-        #if invert_norm:
-        #    first_guess = first_guess + (np.mean(y),)
+    # since the process is closer to a log-normal process,
+    # estimate std of log-normal process
+    y_log_err = np.sqrt(np.log(1. + y_err**2))
+    while n < num_resamplings:
+        y_b_log = y_log + np.random.normal(loc=0., scale=y_log_err)
         optimization_results = minimize(
             loss,
             first_guess,
-            args=(y_b),
-            #method=method,
+            args=(y_b_log) if model == "exp" else (np.exp(y_b_log)),
+            # method=method,
             bounds=bounds,  # jac="3-point"
         )
         if _check_if_at_bound(optimization_results.x, bounds):
@@ -223,123 +298,7 @@ def fit_relative_rate_vs_phase_bootstrap(
     inverted_sin_phi = np.sin(inverted_phi)
     mean_phi = np.arctan2(np.mean(inverted_sin_phi), np.mean(inverted_cos_phi))
     diff = inverted_phi - mean_phi
-    diff_phi = np.min(
-        np.stack(
-            [
-                np.abs(diff),
-                np.abs(2.0 * np.pi + diff),
-                np.abs(diff - 2.0 * np.pi),
-            ],
-            axis=1,
-        ),
-        axis=1,
-    )
-    model_parameters = {
-        #"alpha": np.mean(inverted_alpha),
-        #"phi": mean_phi,
-        "alpha": inverted_alpha[0],
-        "phi": inverted_phi[0],
-    }
-    model_errors = {
-            "alpha_err": np.std(inverted_alpha),
-            "phi_err": np.mean(diff_phi),
-            }
-    if invert_norm:
-        model_parameters["C"] = np.mean(inverted_C)
-        model_errors["C_err"] = np.std(inverted_C)
-    model_func = partial(
-        _model,
-        alpha=model_parameters["alpha"],
-        phi=model_parameters["phi"],
-        C=model_parameters["C"] if invert_norm else 1.
-    )
-    model = {"parameters": model_parameters, "errors": model_errors, "func": model_func}
-    return model
-
-
-def fit_rate_ratio_vs_phase_bootstrap(
-    x, y, y_err,
-    num_bootstraps=10,
-    objective="l2",
-    model="cosine",
-    y_err_min=0.,
-    invert_norm=False
-):
-    """ """
-    warnings.warn(
-            "Use fit_relative_rate_vs_phase_bootstrap instead!"
-            )
-    return fit_relative_rate_vs_phase_bootstrap(
-            x, y, y_err, num_bootstraps=num_bootstraps,
-            objective=objective, model=model, y_err_min=y_err_min,
-            invert_norm=invert_norm
-            )
-    #from scipy.optimize import minimize
-
-    #assert model in {"cosine", "exp"}, "model should be either of 'cosine' or 'exp'"
-
-    #deg2rad = np.pi / 180.0
-    #x_ = x * deg2rad
-
-    #if model == "cosine":
-    #    _model = cosine_rate_ratio
-    #    bounds = [(0.0, 1.0), (-np.pi, np.pi)]
-    #elif model == "exp":
-    #    _model = exp_rate_ratio
-    #    bounds = [(0.0, 10.0), (-np.pi, np.pi)]
-    #if invert_norm:
-    #    bounds = bounds + [(0., 10.)]
-
-    #if objective == "l2":
-    #    # l2-norm
-    #    loss = lambda p, obs: np.sum((_model(x_, *p) - obs) ** 2)
-    #elif objective == "l1":
-    #    # l1-norm
-    #    loss = lambda p, obs: np.sum(np.abs(_model(x_, *p) - obs))
-    #elif objective == "negative-log-likelihood":
-    #    # negative log-likelihood
-    #    loss = lambda p, obs: -np.sum(obs * np.log(_model(x_, *p)))
-
-    #inverted_alpha = np.zeros(num_bootstraps, dtype=np.float32)
-    #inverted_phi = np.zeros(num_bootstraps, dtype=np.float32)
-    #if invert_norm:
-    #    inverted_C = np.zeros(num_bootstraps, dtype=np.float32)
-    #n = 0
-    #while n < num_bootstraps:
-    #    # generate random sample assuming that each bin [i] of the histogram
-    #    # is normally distributed with mean y[i] and std y_err[i]
-    #    y_b = np.random.normal(loc=0.0, scale=1.0, size=len(y))
-    #    # noisy y
-    #    y_b = y_b * np.maximum(y_err, y_err_min) + y
-    #    # don't allow negative values (impossible)
-    #    y_b = np.maximum(y_b, 0.0)
-    #    # normalized noisy y
-    #    #y_b = y_b / np.mean(y_b)
-    #    # first_guess = (0.02 * np.random.random(), 2. * np.pi * np.random.random() - np.pi)
-    #    first_guess = (
-    #        0.05 * np.random.random(),
-    #        np.pi * np.random.random() - np.pi / 2.0,
-    #    )
-    #    if invert_norm:
-    #        first_guess = first_guess + (1.,)
-    #    optimization_results = minimize(
-    #        loss,
-    #        first_guess,
-    #        args=(y_b),
-    #        bounds=bounds,  # jac="3-point"
-    #    )
-    #    inverted_alpha[n] = optimization_results.x[0]
-    #    inverted_phi[n] = optimization_results.x[1]
-    #    if invert_norm:
-    #        inverted_C[n] = optimization_results.x[2]
-    #    if inverted_alpha[n] == 0:
-    #        continue
-    #    n += 1
-    #inverted_cos_phi = np.cos(inverted_phi)
-    #inverted_sin_phi = np.sin(inverted_phi)
-    #mean_phi = np.arctan2(np.mean(inverted_sin_phi), np.mean(inverted_cos_phi))
-    #diff = inverted_phi - mean_phi
-    #diff_phi = np.min(
+    # diff_phi = np.min(
     #    np.stack(
     #        [
     #            np.abs(diff),
@@ -349,26 +308,50 @@ def fit_rate_ratio_vs_phase_bootstrap(
     #        axis=1,
     #    ),
     #    axis=1,
-    #)
-    #model_parameters = {
-    #    "alpha": np.mean(inverted_alpha),
-    #    "phi": mean_phi,
-    #}
-    #model_errors = {
-    #        "alpha_err": np.std(inverted_alpha),
-    #        "phi_err": np.mean(diff_phi),
-    #        }
-    #if invert_norm:
-    #    model_parameters["C"] = np.mean(inverted_C)
-    #    model_errors["C_err"] = np.std(inverted_C)
-    #model_func = partial(
-    #    _model,
-    #    alpha=model_parameters["alpha"],
-    #    phi=model_parameters["phi"],
-    #    C=model_parameters["C"] if invert_norm else 1.
-    #)
-    #model = {"parameters": model_parameters, "errors": model_errors, "func": model_func}
-    #return model
+    # )
+    diff_phi2 = np.min(
+        np.stack(
+            [
+                diff**2,
+                (2.0 * np.pi + diff) ** 2,
+                (diff - 2.0 * np.pi) ** 2,
+            ],
+            axis=1,
+        ),
+        axis=1,
+    )
+
+    model_parameters = {
+        # "alpha": np.mean(inverted_alpha),
+        # "phi": mean_phi,
+        "alpha": inverted_alpha[0],
+        "phi": inverted_phi[0],
+    }
+    model_errors = {
+        "alpha_err": np.std(inverted_alpha),
+        # "phi_err": np.mean(diff_phi),
+        "phi_err": np.sqrt(np.mean(diff_phi2)),
+    }
+    if invert_norm:
+        model_parameters["C"] = np.mean(inverted_C)
+        model_errors["C_err"] = np.std(inverted_C)
+        C = model_parameters["C"]
+    if model == "exp":
+        model_func = partial(
+            exp_rate_ratio,
+            alpha=model_parameters["alpha"],
+            phi=model_parameters["phi"],
+            C=np.exp(y_log_mean)
+        )
+    else:
+        model_func = partial(
+            _model,
+            alpha=model_parameters["alpha"],
+            phi=model_parameters["phi"],
+            C=model_parameters["C"] if invert_norm else 1.0,
+        )
+    model = {"parameters": model_parameters, "errors": model_errors, "func": model_func}
+    return model
 
 
 # ----------------------------------------------------------
@@ -380,14 +363,62 @@ def linear_func(x, a, b):
     return b + a * x
 
 
-def fit_relative_rate_vs_stress_linear(x, y, yerr):
-    """Least squares solution for linear regression.
+def rate_state_friction(x, Asig_Pa, ln=False):
+    """ """
+    if ln:
+        return x / Asig_Pa
+    else:
+        return np.exp(x / Asig_Pa)
 
-    This routine uses scipy.stats's linregress function.
+
+def fit_relative_rate_vs_stress_linear(
+    x,
+    y,
+    y_err,
+    y_err_min=0.0,
+    use_err_for_weights=False,
+):
+    """
+    Fit the relative rate of seismicity as a function of stress amplitude with empirical model.
+
+    Parameters:
+    -----------
+    x : array-like
+        `num_phases` list or array of tidal stresses, in Pascal.
+    y : array-like
+        `num_phases` list or array of relative rate of seismicity.
+    y_err : array-like
+        `num_phases` list or array of uncertainties on relative rate of seismicity.
+    y_err_min : float or numpy.ndarray, optional
+        Errors are clipped such that `y_err >= y_err_min`. Defaults to 0.
+    use_err_for_weights : bool, optional
+        If True, the tidal phases contribute to the objective function inversely
+        proportionally to the error in the relative rate of seismicity, that is,
+        to `y_err`. Errors are first clipped between the 2.5th and 97.5th percentile
+        for numerical stability. Defaults to False.
+
+    Returns:
+    --------
+    dict
+        Dictionary with following fields:
+        - 'parameters': The values of the inverted parameters.
+        - 'errors': The uncertainties on the inverted parameters.
+        - 'func': An operator func(x) that returns the values of 
+                  the modulation model at stresses `x`.
     """
     from scipy.stats import linregress, t
 
-    slope, intercept, r, p, se = linregress(x, y)
+    y_err = np.maximum(y_err, y_err_min)
+    if use_err_for_weights:
+        weights = np.clip(
+            y_err, a_min=np.percentile(y_err, 2.5), a_max=np.percentile(y_err, 97.5)
+        )
+        weights = 1.0 / weights
+    else:
+        weights = np.ones(len(y_err))
+    weights /= weights.sum()
+
+    slope, intercept, se = weighted_linear_regression(x, y, W=weights)
 
     model_parameters = {
         "slope": slope,
@@ -404,77 +435,89 @@ def fit_relative_rate_vs_stress_linear(x, y, yerr):
     return model
 
 
-def rate_state(x, Asig_Pa, ln=False):
-    """ """
-    if ln:
-        return x / Asig_Pa
-    else:
-        return np.exp(x / Asig_Pa)
-
-def fit_relative_rate_vs_stress_rate_state_bootstrap(x, y, y_err, num_bootstraps=100):
+def fit_relative_rate_vs_stress_rate_state(
+    x,
+    y,
+    y_err,
+    y_err_min=0.0,
+    use_err_for_weights=False,
+    num_resamplings=10,
+):
     """
-    Fit a rate-state model to data with bootstrapping.
+    Fit the relative rate of seismicity as a function of stress amplitude with bootstrap uncertainties.
 
     Parameters:
     -----------
-    x : numpy.ndarray
-        Independent variable representing data.
-
-    y : numpy.ndarray
-        Dependent variable representing a corresponding response.
-
-    y_err : numpy.ndarray
-        Error values associated with the dependent variable y.
-
-    num_bootstraps : int, optional
-        The number of bootstrap resamples to generate (default is 100).
+    x : array-like
+        `num_phases` list or array of tidal stresses, in Pascal.
+    y : array-like
+        `num_phases` list or array of relative rate of seismicity.
+    y_err : array-like
+        `num_phases` list or array of uncertainties on relative rate of seismicity.
+    num_resamplings : int, optional
+        Number of random samples drawn from N(mean=y, std=y_err) used to propagate
+        measurement uncertainties into modeling uncertainties. Defaults to 10.
+    y_err_min : float or numpy.ndarray, optional
+        Errors are clipped such that `y_err >= y_err_min`. Defaults to 0.
+    use_err_for_weights : bool, optional
+        If True, the tidal phases contribute to the objective function inversely
+        proportionally to the error in the relative rate of seismicity, that is,
+        to `y_err`. Errors are first clipped between the 2.5th and 97.5th percentile
+        for numerical stability. Defaults to False.
 
     Returns:
     --------
-    float
-        The median of the optimized parameter for the rate-state model from bootstrapping.
-
-    float
-        The robust uncertainty estimate for the parameter.
+    dict
+        Dictionary with following fields:
+        - 'parameters': The values of the inverted parameters.
+        - 'errors': The uncertainties on the inverted parameters.
+        - 'func': An operator func(x) that returns the values of 
+                  the modulation model at stresses `x`.
     """
     from scipy.optimize import minimize_scalar
     from scipy.stats import linregress
 
-    bounds = (1.0, 1.e7)
-    W = np.ones(len(y_err), dtype=y_err.dtype)
-    W[y_err != 0.] = 1. / y_err[y_err != 0.]
-    W /= W.sum()
-    inverted_Asig_Pa = np.zeros(num_bootstraps, dtype=np.float32)
-    for n in range(num_bootstraps):
-        # generate random sample assuming that each bin [i] of the histogram
-        # is normally distributed with mean y[i] and std y_err[i]
-        y_b = np.random.normal(loc=0.0, scale=1.0, size=len(y))
-        # noisy y
-        y_b = y_b * y_err + y
-        # don't allow negative values (impossible)
-        y_b = np.maximum(y_b, 0.0001)
+    bounds = (1.0, 1.0e7)
+
+    y_err = np.maximum(y_err, y_err_min)
+    if use_err_for_weights:
+        weights = np.clip(
+            y_err, a_min=np.percentile(y_err, 2.5), a_max=np.percentile(y_err, 97.5)
+        )
+        weights = 1.0 / weights
+    else:
+        weights = np.ones(len(y_err))
+    weights /= weights.sum()
+
+    inverted_Asig_Pa = np.zeros(num_resamplings, dtype=np.float32)
+    # since the process is closer to a log-normal process,
+    # estimate std of log-normal process
+    y_log_err = np.sqrt(np.log(1. + y_err**2))
+    y_log = np.log(y)
+    for n in range(num_resamplings):
+        y_log_b = y_log + np.random.normal(loc=0., scale=y_log_err)
         # convert data to log and fit linear function
         # note: inverting for a non-trivial intercept corrects
         # for possible errors when finding the reference rate
         # at sigma=0   :)
-        slope, intercept, r, p, se = linregress(x, np.log(y_b))
-        inverted_Asig_Pa[n] = 1. / slope
-
+        # slope, intercept, r, p, se = linregress(x, np.log(y_b))
+        slope, intercept, se = weighted_linear_regression(x, y_log_b, W=weights)
+        inverted_Asig_Pa[n] = 1.0 / slope
 
     model_parameters = {
-        #"asig_kPa": np.median(inverted_Asig_Pa) / 1000.0,
-        "asig_kPa": np.mean(inverted_Asig_Pa) / 1000.0,
+        # "asig_kPa": np.median(inverted_Asig_Pa) / 1000.0,
+        "asig_kPa": np.mean(inverted_Asig_Pa)
+        / 1000.0,
     }
     model_errors = {
         "asig_kPa_err": 1.48 * scimad(inverted_Asig_Pa) / 1000.0,
-        "asig_kPa_2.5th": np.percentile(inverted_Asig_Pa, 2.5) / 1000.,
-        "asig_kPa_97.5th": np.percentile(inverted_Asig_Pa, 97.5) / 1000.,
+        "asig_kPa_2.5th": np.percentile(inverted_Asig_Pa, 2.5) / 1000.0,
+        "asig_kPa_97.5th": np.percentile(inverted_Asig_Pa, 97.5) / 1000.0,
     }
     model_func = partial(
-        rate_state,
+        rate_state_friction,
         Asig_Pa=model_parameters["asig_kPa"] * 1000.0,
     )
     model = {"parameters": model_parameters, "errors": model_errors, "func": model_func}
 
     return model
-
