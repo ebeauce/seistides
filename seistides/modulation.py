@@ -304,7 +304,7 @@ class Modulationmeter(ABC):
             self.catalog = None
         else:
             self.catalog = catalog
-            self.catalog["origin_time"] = pd.to_datetime(self.catalog["origin_time"])
+            self.catalog.loc[:, "origin_time"] = pd.to_datetime(self.catalog.loc[:, "origin_time"])
             if "t_eq_s" not in self.catalog:
                 self.catalog["t_eq_s"] = (
                     pd.to_datetime(self.catalog["origin_time"])
