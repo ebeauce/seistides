@@ -72,6 +72,24 @@ def exp_rate_ratio(x, alpha, phi, C=1.0, log=False):
     else:
         return C * np.exp(alpha * np.cos(x - phi))
 
+def exp_rate_ratio2(x, alpha, phi, C=1.0, log=False):
+    phi = _modulo(phi)
+    if log and C == 1:
+        out = alpha * np.cos(x - phi)
+    elif log:
+        out = np.log(C) + alpha * np.cos(x - phi)
+    else:
+        out = C * np.exp(alpha * np.cos(x - phi))
+        out /= out.mean()
+    return out
+
+def exp_rate_ratio_log(x, alpha, phi_0, C=1.):
+    phi_0 = _modulo(phi_0)
+    if C == 1.:
+        return alpha * np.cos(x - phi_0)
+    else:
+        return np.log(C) + alpha * np.cos(x - phi_0)
+
 
 def _check_if_at_bound(p, bounds):
     if len(np.atleast_1d(p)) > 1:
@@ -168,12 +186,15 @@ def fit_relative_rate_vs_phase(
 
     deg2rad = np.pi / 180.0
     x_ = x * deg2rad
+    y_log = np.log(y)
+    y_log_mean = y_log.mean()
 
     if model == "cosine":
         _model = cosine_rate_ratio
         bounds = [(0.0, 1.0), (-np.pi, np.pi)]
     elif model == "exp":
-        _model = exp_rate_ratio
+        _model = exp_rate_ratio_log
+        y_log = y_log - y_log_mean
         bounds = [(0.0, 10.0), (-np.pi, np.pi)]
     if invert_norm:
         bounds = bounds + [(0.0, 10.0)]
@@ -211,9 +232,6 @@ def fit_relative_rate_vs_phase(
     elif objective == "l1":
         # l1-norm
         loss = lambda p, obs: np.sum(weights * np.abs(_model(x_, *p) - obs))
-    # elif objective == "negative-log-likelihood":
-    #    # negative log-likelihood
-    #    loss = lambda p, obs: -np.sum(weights * obs * np.log(_model(x_, *p)))
 
     inverted_alpha = np.zeros(num_resamplings + 1, dtype=np.float32)
     inverted_phi = np.zeros(num_resamplings + 1, dtype=np.float32)
@@ -232,7 +250,7 @@ def fit_relative_rate_vs_phase(
         optimization_results = minimize(
             loss,
             first_guess,
-            args=(y),
+            args=(y_log) if model == "exp" else (y),
             # method=method,
             bounds=bounds,  # jac="3-point"
         )
@@ -258,13 +276,12 @@ def fit_relative_rate_vs_phase(
     # since the process is closer to a log-normal process,
     # estimate std of log-normal process
     y_log_err = np.sqrt(np.log(1. + y_err**2))
-    y_log = np.log(y)
     while n < num_resamplings:
-        y_b = np.exp(y_log + np.random.normal(loc=0., scale=y_log_err))
+        y_b_log = y_log + np.random.normal(loc=0., scale=y_log_err)
         optimization_results = minimize(
             loss,
             first_guess,
-            args=(y_b),
+            args=(y_b_log) if model == "exp" else (np.exp(y_b_log)),
             # method=method,
             bounds=bounds,  # jac="3-point"
         )
@@ -318,12 +335,21 @@ def fit_relative_rate_vs_phase(
     if invert_norm:
         model_parameters["C"] = np.mean(inverted_C)
         model_errors["C_err"] = np.std(inverted_C)
-    model_func = partial(
-        _model,
-        alpha=model_parameters["alpha"],
-        phi=model_parameters["phi"],
-        C=model_parameters["C"] if invert_norm else 1.0,
-    )
+        C = model_parameters["C"]
+    if model == "exp":
+        model_func = partial(
+            exp_rate_ratio,
+            alpha=model_parameters["alpha"],
+            phi=model_parameters["phi"],
+            C=np.exp(y_log_mean)
+        )
+    else:
+        model_func = partial(
+            _model,
+            alpha=model_parameters["alpha"],
+            phi=model_parameters["phi"],
+            C=model_parameters["C"] if invert_norm else 1.0,
+        )
     model = {"parameters": model_parameters, "errors": model_errors, "func": model_func}
     return model
 
