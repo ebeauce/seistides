@@ -392,8 +392,6 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
         forcing=None,
         window_duration_days=None,
         window_type="backward",
-        short_window_days=None,
-        num_short_windows=None,
     ):
         super().__init__(
             catalog=catalog,
@@ -746,9 +744,11 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
         if forcing_name not in self.modulation:
             self.modulation[forcing_name] = {}
         self.modulation[forcing_name][window_time] = modulation
+        self.modulation[forcing_name][window_time]["bins"] = self.forcing_bins[forcing_name]
         self.modulation[forcing_name][window_time]["midbins"] = self._midbins(
-            self.forcing_bins[forcing_name]
+            self.modulation[forcing_name][window_time]["bins"]
         )
+
 
 
 class ModulationmeterMultiWindows(Modulationmeter):
