@@ -298,13 +298,61 @@ class Modulationmeter(ABC):
                 100. * (1. - np.sum(residuals_proposed_model**2) / np.sum(obs_c**2))
                 )
 
+    def plot_modulation(
+            self, forcing, window_name, ymin=0.75, ymax=1.25, model_name=None, **kwargs
+            ):
+        """
+        """
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import Normalize
+        from matplotlib.cm import ScalarMappable
+
+        norm = Normalize(vmin=ymin, vmax=ymax)
+        scalar_map = ScalarMappable(
+                norm=norm, cmap=kwargs.get("cmap", plt.get_cmap("coolwarm"))
+                )
+
+        fig, ax = plt.subplots()
+        _mod = self.modulation[forcing][window_name]
+        _bins = _mod["bins"]
+        _midbins = _mod["midbins"]
+        ax.bar(
+                _bins[:-1],
+                _mod["relative_rate"],
+                yerr=_mod["relative_rate_err"],
+                width=_bins[1]-_bins[0],
+                edgecolor=kwargs.get("edgecolor", "none"),
+                align=kwargs.get("align", "edge"),
+                color=scalar_map.to_rgba(_mod["relative_rate"]),
+                )
+        ax.axhline(1.0, lw=0.50, color="k")
+
+        if model_name is not None:
+            if window_name in self.model[forcing]:
+                _model = self.model[forcing][window_name][model_name]
+                fit = _model["func"](np.deg2rad(_midbins))
+                ax.plot(_midbins, fit, color="k", label="Model")
+
+        xtick_loc = [-180.0, -90.0, 0, 90.0, 180.0]
+        xtick_lab = [r"$-\pi$", r"$-\frac{\pi}{2}$", r"$0$", r"$\frac{\pi}{2}$", r"$\pi$"]
+        ax.set_xticks(xtick_loc)
+        ax.set_xticklabels(xtick_lab)
+
+        ax.set_ylabel(r"Relative rate of seismicity")
+        ax.set_xlabel(r"Tidal phase, $\phi$ (rad)")
+
+        ax.grid()
+        ax.set_ylim(ymin, ymax)
+
+        return fig
+
 
     def set_catalog(self, catalog):
         if catalog is None:
             self.catalog = None
         else:
             self.catalog = catalog
-            self.catalog["origin_time"] = pd.to_datetime(self.catalog["origin_time"])
+            self.catalog.loc[:, "origin_time"] = pd.to_datetime(self.catalog.loc[:, "origin_time"])
             if "t_eq_s" not in self.catalog:
                 self.catalog["t_eq_s"] = (
                     pd.to_datetime(self.catalog["origin_time"])
@@ -344,8 +392,6 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
         forcing=None,
         window_duration_days=None,
         window_type="backward",
-        short_window_days=None,
-        num_short_windows=None,
     ):
         super().__init__(
             catalog=catalog,
@@ -698,9 +744,11 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
         if forcing_name not in self.modulation:
             self.modulation[forcing_name] = {}
         self.modulation[forcing_name][window_time] = modulation
+        self.modulation[forcing_name][window_time]["bins"] = self.forcing_bins[forcing_name]
         self.modulation[forcing_name][window_time]["midbins"] = self._midbins(
-            self.forcing_bins[forcing_name]
+            self.modulation[forcing_name][window_time]["bins"]
         )
+
 
 
 class ModulationmeterMultiWindows(Modulationmeter):
