@@ -61,10 +61,6 @@ def estimate_rate_forcingtime_bins(
             forcingtime_bins["forcing_bin_membership"].isin(bin_edge_indexes).values
         )[0]
 
-        # selected_forcingtime_bin_indexes = np.where(
-        #    np.isin(forcingtime_bins["forcing_bin_membership"], bin_edge_indexes)
-        # )[0]
-
         if num_std_cutoff > 0.0:
             non_zero = forcingtime_bin_count[selected_forcingtime_bin_indexes] > 0.0
             if np.sum(non_zero) > 2:
@@ -77,11 +73,6 @@ def estimate_rate_forcingtime_bins(
                 anomalous = r_ > mean_ + num_std_cutoff * std_
             else:
                 anomalous = np.zeros(len(selected_forcingtime_bin_indexes), dtype=bool)
-            # if np.sum(anomalous) > 0:
-            #    print(
-            #        f"mean={mean_:.2e}, std={std_:.2e}, anomalous: ",
-            #        r_[anomalous],
-            #    )
 
             selected_forcingtime_bin_indexes = selected_forcingtime_bin_indexes[
                 ~anomalous
@@ -125,8 +116,6 @@ def estimate_rate_forcingtime_bins(
         average_rate = forcingtime_bin_count.sum() / forcingtime_bin_duration_sec.sum()
     if average_rate == 0.0:
         average_rate = 1.0
-    #average_rate = np.median(rate_vs_forcing)
-    #average_rate = rate_vs_forcing.mean()
 
     output = {
         "relative_rate": rate_vs_forcing / average_rate,
@@ -346,12 +335,10 @@ def composite_rate_estimate(
     }, "aggregate should be either of 'mean', 'median', 'svd' or 'svd-stochastic'"
 
     if aggregate == "median":
-        # operator = partial(np.ma.median, axis=-1)
         operator = partial(np.median, axis=-1, **aggregate_kwargs)
         err_operator = partial(scimad, axis=-1)
         pulling_operator = np.median
     elif aggregate == "mean":
-        # operator = partial(np.ma.mean, axis=-1)
         operator = partial(np.mean, axis=-1, **aggregate_kwargs)
         pulling_operator = np.mean
         err_operator = partial(np.std, axis=-1)
@@ -503,9 +490,6 @@ def composite_rate_estimate(
                 all_windows = all_windows[half_wiener_win[0] : -half_wiener_win[0], :]
             if half_wiener_win[1] > 0:
                 all_windows = all_windows[:, half_wiener_win[1] : -half_wiener_win[1]]
-
-        # if np.sum(np.isnan(all_windows)) > 0:
-        #    breakpoint()
 
         if keep_short_windows:
             seismicity_vs_forcing[f"all_windows_{field}"] = all_windows
@@ -849,18 +833,11 @@ def compute_instantaneous_phase_at_eq(
     catalog, tidal_stress, fields, attach_unravelled_phase=False
 ):
     """Interpolate instantaneous phase at earthquake timings."""
-    eq_timings = catalog.loc[:, "t_eq_s"].values
+    eq_timings = catalog.loc[:, "event_timing_sec"].values
     for field in fields:
         if field in catalog.columns:
             catalog.drop(field, axis=1, inplace=True)
         if f"unravelled_{field}" in tidal_stress:
-            # catalog.loc[indexes, field] = (
-            #    np.interp(
-            #        catalog.loc[indexes, "t_eq_s"].values,
-            #        tidal_stress["time_sec"].values,
-            #        180.0 + tidal_stress[f"unravelled_{field}"].values,
-            #    )
-            # ) % 360.0 - 180.0
             catalog = catalog.assign(
                 tmp_name=np.interp(
                     eq_timings,
@@ -871,11 +848,6 @@ def compute_instantaneous_phase_at_eq(
                 - 180.0,
             )
             if attach_unravelled_phase:
-                # catalog.loc[indexes, f"unravelled_{field}"] = np.interp(
-                #    catalog.loc[indexes, "t_eq_s"].values,
-                #    tidal_stress["time_sec"].values,
-                #    tidal_stress[f"unravelled_{field}"].values,
-                # )
                 catalog = catalog.assign(
                     tmp_name2=np.interp(
                         eq_timings,
@@ -910,7 +882,7 @@ def unravel_phase(phases, degree=True):
 def compute_stress_at_eq(catalog, tidal_stress, fields):
     """Interpolate stress at earthquake timings."""
     # indexes = catalog.index
-    eq_timings = catalog.loc[:, "t_eq_s"].values
+    eq_timings = catalog.loc[:, "event_timing_sec"].values
     for f in fields:
         if f in catalog.columns:
             catalog.drop(f, axis=1, inplace=True)
@@ -941,8 +913,6 @@ def compute_fortnightly(catalog, tidal_stress, full_moons_path):
     rel_time_sec -= rel_time_sec[0]
 
     lunar_times = pd.Timestamp(full_moons.min()) + rel_time_sec.astype("timedelta64[s]")
-    # lunar_cycle = np.cos(2.0 * np.pi * (rel_time_sec / avg_moon_period_sec))
-    # lunar_pos = (360.0 * (rel_time_sec / avg_moon_period_sec)) % 360
     # unravel the lunar phase for easier interpolation
     lunar_pos_unravelled = 360.0 * (rel_time_sec / avg_moon_period_sec)
 
@@ -966,7 +936,7 @@ def compute_fortnightly(catalog, tidal_stress, full_moons_path):
     # decomposing catalog into rising and falling fortnightly
     catalog["lunar_phase"] = (
         np.interp(
-            catalog["t_eq_s"],
+            catalog["event_timing_sec"],
             lunar_times.astype("datetime64[s]").astype("float64"),
             lunar_pos_unravelled,
         )
@@ -979,7 +949,7 @@ def compute_fortnightly(catalog, tidal_stress, full_moons_path):
 
     # ## Attribute a fortnightly phase to each earthquake
     catalog["fortnightly_phase"] = np.interp(
-        catalog["t_eq_s"], tidal_stress["time_sec"], tidal_stress["fortnightly_phase"]
+        catalog["event_timing_sec"], tidal_stress["time_sec"], tidal_stress["fortnightly_phase"]
     )
 
 
