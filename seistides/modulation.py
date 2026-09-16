@@ -353,8 +353,8 @@ class Modulationmeter(ABC):
         else:
             self.catalog = catalog
             self.catalog.loc[:, "origin_time"] = pd.to_datetime(self.catalog.loc[:, "origin_time"])
-            if "t_eq_s" not in self.catalog:
-                self.catalog["t_eq_s"] = (
+            if "event_timing_sec" not in self.catalog:
+                self.catalog["event_timing_sec"] = (
                     pd.to_datetime(self.catalog["origin_time"])
                     .values.astype("datetime64[ms]")
                     .astype("float64")
@@ -571,7 +571,7 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
 
         for forcing_name in self.forcing_bins:
             if (
-                self.catalog["t_eq_s"].values.max()
+                self.catalog["event_timing_sec"].values.max()
                 > self.forcingtime_bins[forcing_name][
                     "forcingtime_bin_starttime_sec"
                 ].max()
@@ -582,7 +582,7 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 )
                 continue
             if (
-                self.catalog["t_eq_s"].values.min()
+                self.catalog["event_timing_sec"].values.min()
                 < self.forcingtime_bins[forcing_name][
                     "forcingtime_bin_starttime_sec"
                 ].min()
@@ -597,7 +597,7 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
             #       given bin
             forcingtime_bin_eq_membership = (
                 np.digitize(
-                    self.catalog["t_eq_s"].values,
+                    self.catalog["event_timing_sec"].values,
                     self.forcingtime_bins[forcing_name][
                         "forcingtime_bin_starttime_sec"
                     ],
@@ -948,19 +948,19 @@ class ShuffledModulationmeter(Modulationmeter):
 
     def _random_catalog(self):
         """ """
-        tmin = self.original_catalog["t_eq_s"].min()
-        tmax = self.original_catalog["t_eq_s"].max()
+        tmin = self.original_catalog["event_timing_sec"].min()
+        tmax = self.original_catalog["event_timing_sec"].max()
         num_events = len(self.original_catalog)
-        t_eq_s = tmin + (tmax - tmin) * np.random.random(size=num_events)
+        event_timing_sec = tmin + (tmax - tmin) * np.random.random(size=num_events)
         self.random_catalog = pd.DataFrame(
-            {"t_eq_s": t_eq_s, "origin_time": pd.to_datetime(t_eq_s, unit="s")}
+            {"event_timing_sec": event_timing_sec, "origin_time": pd.to_datetime(event_timing_sec, unit="s")}
         )
-        self.random_catalog.sort_values("t_eq_s", inplace=True)
+        self.random_catalog.sort_values("event_timing_sec", inplace=True)
 
     def _block_shuffle_catalog(self, num_events_per_block=100):
         """ """
         # differentiate times
-        wt = np.diff(self.original_catalog["t_eq_s"])
+        wt = np.diff(self.original_catalog["event_timing_sec"])
         # wt = np.hstack((wt.mean(), wt))
         # attribute bloc membership
         indexes = np.arange(1, len(self.original_catalog))
@@ -971,21 +971,21 @@ class ShuffledModulationmeter(Modulationmeter):
         # shuffle blocs
         np.random.shuffle(block_indexes)
         wt_shuffled = np.hstack([0.0] + [wt[blocks[i]] for i in block_indexes])
-        t_eq_s = np.cumsum(wt_shuffled) + self.original_catalog["t_eq_s"].min()
+        event_timing_sec = np.cumsum(wt_shuffled) + self.original_catalog["event_timing_sec"].min()
         if not hasattr(self, "random_catalog"):
             self.random_catalog = self.original_catalog[
-                ["t_eq_s", "origin_time"]
+                ["event_timing_sec", "origin_time"]
             ].copy()
-        self.random_catalog["origin_time"] = pd.to_datetime(t_eq_s, unit="s")
-        self.random_catalog["t_eq_s"] = t_eq_s
-        self.random_catalog.sort_values("t_eq_s", inplace=True)
+        self.random_catalog["origin_time"] = pd.to_datetime(event_timing_sec, unit="s")
+        self.random_catalog["event_timing_sec"] = event_timing_sec
+        self.random_catalog.sort_values("event_timing_sec", inplace=True)
 
     def shuffle_and_measure_modulation(
         self, window_time, forcing_names, randomization_kwargs={}, **kwargs
     ):
         """ """
         self.randomize_catalog(**randomization_kwargs)
-        self.random_catalog.sort_values("t_eq_s", inplace=True)
+        self.random_catalog.sort_values("event_timing_sec", inplace=True)
         self.catalog = self.random_catalog
         self.count_events_in_forcingtime_bins()
 
