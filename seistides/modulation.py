@@ -299,7 +299,7 @@ class Modulationmeter(ABC):
                 )
 
     def plot_modulation(
-            self, forcing, window_name, ymin=0.75, ymax=1.25, model_name=None, **kwargs
+            self, forcing, window_name, ymin=0.75, ymax=1.25, model_name=None, type="phase", **kwargs
             ):
         """
         """
@@ -333,13 +333,17 @@ class Modulationmeter(ABC):
                 fit = _model["func"](np.deg2rad(_midbins))
                 ax.plot(_midbins, fit, color="k", label="Model")
 
-        xtick_loc = [-180.0, -90.0, 0, 90.0, 180.0]
-        xtick_lab = [r"$-\pi$", r"$-\frac{\pi}{2}$", r"$0$", r"$\frac{\pi}{2}$", r"$\pi$"]
-        ax.set_xticks(xtick_loc)
-        ax.set_xticklabels(xtick_lab)
+        if type == "phase":
+            xtick_loc = [-180.0, -90.0, 0, 90.0, 180.0]
+            xtick_lab = [r"$-\pi$", r"$-\frac{\pi}{2}$", r"$0$", r"$\frac{\pi}{2}$", r"$\pi$"]
+            ax.set_xticks(xtick_loc)
+            ax.set_xticklabels(xtick_lab)
+            ax.set_xlabel(r"Tidal phase, $\phi$ (rad)")
+        elif type == "stress":
+            ax.set_xlabel(r"Tidal stress, $\sigma$ (Pa)")
+
 
         ax.set_ylabel(r"Relative rate of seismicity")
-        ax.set_xlabel(r"Tidal phase, $\phi$ (rad)")
 
         ax.grid()
         ax.set_ylim(ymin, ymax)
