@@ -869,6 +869,60 @@ def compute_instantaneous_phase_at_eq(
         catalog.rename(columns={"tmp_name": field}, inplace=True)
     return catalog
 
+def compute_instantaneous_phase(x, t=None):
+    from scipy.signal import hilbert
+
+    x_a = hilbert(x)
+    inst_phase = np.angle(x_a, deg=True)
+
+    if t is not None:
+        # compute instantaneous frequency
+        dt = t[1] - t[0]
+        real_derivative = np.gradient(x_a.real, dt)
+        imag_derivative = np.gradient(x_a.imag, dt)
+
+        inst_radial_freq = (
+                (x_a.real * imag_derivative - x_a.imag * real_derivative)
+                / (np.abs(x_a)**2)
+                )
+
+
+        return inst_phase, inst_radial_freq 
+
+    return inst_phase
+
+
+def compute_instantaneous_phase_at_arbitrary_times(event_times, x, t_x):
+    """
+    Simpler than unravelling the instantaneous phase?
+    """
+    from scipy.signal import hilbert
+    from scipy.interpolate import interp1d
+
+    x_a = hilbert(x)
+
+    x_a_real_interp = np.interp(event_times, t_x, x_a.real)
+    x_a_imag_interp = np.interp(event_times, t_x, x_a.imag)
+    x_a_interp = x_a_real_interp + 1j * x_a_imag_interp
+    #print(x_a_real_interp, x_a_imag_interp, x_a_interp)
+
+    inst_phase = np.angle(x_a_interp, deg=True)
+
+    # compute instantaneous frequency
+    dt = t_x[1] - t_x[0]
+    real_derivative = np.gradient(x_a.real, dt)
+    imag_derivative = np.gradient(x_a.imag, dt)
+
+    real_derivative_interp = np.interp(event_times, t_x, real_derivative)
+    imag_derivative_interp = np.interp(event_times, t_x, imag_derivative)
+
+    inst_radial_freq = (
+            (x_a_interp.real * imag_derivative_interp - x_a_interp.imag * real_derivative_interp)
+            / (np.abs(x_a_interp)**2)
+            )
+
+    return inst_phase, inst_radial_freq 
+
 
 def unravel_phase(phases, degree=True):
     """ """
