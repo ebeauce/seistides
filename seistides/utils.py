@@ -301,6 +301,95 @@ def estimate_rate_forcing_bins(
     return output
 
 
+def estimate_rate_inst_freq_weights(
+    cat,
+    forcing,
+    forcing_bin_edges,
+    instantaneous_freqs=None,
+    clip_relative_rate_above=None,
+    clip_relative_rate_below=None,
+    bin_extension=0,
+    cyclic_bins=False,
+):
+    """Count number of earthquakes in phase bins.
+
+    Parameters
+    -----------
+    cat : `pandas.DataFrame`
+        Earthquake catalog.
+    forcing : `pandas.Series`
+        Tidal forcing time series.
+    forcing_bin_edges : array-like
+        Edges of the forcing bins.
+    bin_extension : int, optional
+        If `bin_extension>0`, the rate is computed in overlapping bins such that
+        rate[i] is the rate in forcing_bins[i-bin_extension:i+bin_extension]. 
+        Defaults to 0.
+    cyclic_bins : bool, optional
+        if True and if `bin_extension>0`, boundaries are periodic. Otherwise, 
+        edge bins are effectively smaller than others. Defaults to False.
+
+    Returns
+    --------
+    dict
+        - "event_count": Event count in each forcing bin.
+        - "bin_duration": Duration spanned by each bin. Some bins, like extreme
+                          stress values, may occur infrequently.
+        - "observed_rate": Event count divided by the bin duration.
+        - "relative_rate": Observed rate normalized by the total average rate.
+    """
+    forcing_at_eq = cat[forcing.name].values
+    instantaneous_freqs = cat[instantaneous_freqs].values
+    bin_membership = cat[f"{forcing.name}_bin_membership"]
+
+    num_bins = len(forcing_bin_edges) - 1
+    event_count = np.zeros(num_bins, dtype=int)
+    observed_rate = np.zeros(num_bins, dtype=float)
+    for i in range(num_bins):
+        if cyclic_bins:
+            bin_edge_indexes = (
+                np.arange(i - bin_extension, i + bin_extension + 1) % num_bins
+            ) + 1
+        else:
+            bin_edge_indexes = (
+                np.arange(
+                    max(0, i - bin_extension), min(num_bins, i + bin_extension + 1)
+                )
+                + 1
+            )
+
+        #selected_events = np.isin(bin_membership, bin_edge_indexes)
+        selected_events = np.where(bin_membership.isin(bin_edge_indexes).values)[0]
+
+        observed_rate[i] = np.sum(instantaneous_freqs[selected_events])
+        event_count[i] = np.sum(selected_events)
+
+    relative_rate = observed_rate / observed_rate.mean()
+
+    mean = np.mean(relative_rate)
+    if clip_relative_rate_above is not None:
+        if mean != 0.0:
+            clip_relative_rate_above = clip_relative_rate_above / mean
+        relative_rate = np.clip(
+            relative_rate, a_min=0.0, a_max=clip_relative_rate_above
+        )
+    if clip_relative_rate_below is not None:
+        if mean != 0.0:
+            clip_relative_rate_below = clip_relative_rate_below / mean
+        relative_rate = np.clip(
+            relative_rate, a_min=clip_relative_rate_below, a_max=relative_rate.max()
+        )
+
+    output = {
+        "relative_rate": relative_rate,
+        "observed_rate": observed_rate,
+        "event_count": event_count,
+        "bin_duration": np.ones(len(event_count)),
+    }
+    #print(event_count)
+    return output
+
+
 def _weighted_mean(x, weights):
     return np.sum(x * weights, axis=-1)
 
@@ -1215,7 +1304,10 @@ def _svd_w_robust_ordering(x):
 
     coefficients = np.median(Ut * S[:, None], axis=1)
     weights = np.abs(coefficients)
-    weights /= weights.sum()
+    weights_sum = weights.sum()
+    if weights_sum == 0.:
+        weights_sum = 1.
+    weights /= weights_sum
     ordered_ind = np.argsort(weights)[::-1]
 
     return (V[:, ordered_ind], S[ordered_ind], Ut[ordered_ind, :], weights[ordered_ind])
@@ -1230,6 +1322,9 @@ def svd_filtering(x, reconstruction_factor=0.66):
     """
     #mu = 1.0
     mu = x.mean()
+    if np.allclose(x - mu, 0.):
+        # happens if all x are the same
+        return x
     V, S, Ut, weights = _svd_w_robust_ordering(x - mu)
 
     first_above_threshold = np.where(np.cumsum(weights) >= reconstruction_factor)[0][0]

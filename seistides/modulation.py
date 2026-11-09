@@ -194,11 +194,7 @@ class Modulationmeter(ABC):
         for t in self.modulation[forcing_name]:
             time.append(t)
         time.sort()
-        performance_metrics = {
-                "delta_aic": [],
-                "rms_residual": [],
-                "r2": []
-                }
+        performance_metrics = {"delta_aic": [], "rms_residual": [], "r2": []}
         for t in time:
             _mod = self.model[forcing_name][t][model_name]
             for param in performance_metrics.keys():
@@ -291,27 +287,33 @@ class Modulationmeter(ABC):
             residuals_proposed_model
         )
         self.model[forcing_name][window_time][model_name]["variance_reduction"] = (
-                100. * (1. - np.sum(residuals_proposed_model**2) / np.sum(obs**2))
-                )
+            100.0 * (1.0 - np.sum(residuals_proposed_model**2) / np.sum(obs**2))
+        )
         obs_c = obs - obs.mean()
-        self.model[forcing_name][window_time][model_name]["r2"] = (
-                100. * (1. - np.sum(residuals_proposed_model**2) / np.sum(obs_c**2))
-                )
+        self.model[forcing_name][window_time][model_name]["r2"] = 100.0 * (
+            1.0 - np.sum(residuals_proposed_model**2) / np.sum(obs_c**2)
+        )
 
     def plot_modulation(
-            self, forcing, window_name, ymin=0.75, ymax=1.25, model_name=None, type="phase",
-            ax=None, **kwargs
-            ):
-        """
-        """
+        self,
+        forcing,
+        window_name,
+        ymin=0.75,
+        ymax=1.25,
+        model_name=None,
+        type="phase",
+        ax=None,
+        **kwargs,
+    ):
+        """ """
         import matplotlib.pyplot as plt
         from matplotlib.colors import Normalize
         from matplotlib.cm import ScalarMappable
 
         norm = Normalize(vmin=ymin, vmax=ymax)
         scalar_map = ScalarMappable(
-                norm=norm, cmap=kwargs.get("cmap", plt.get_cmap("coolwarm"))
-                )
+            norm=norm, cmap=kwargs.get("cmap", plt.get_cmap("coolwarm"))
+        )
 
         if ax is None:
             fig, ax = plt.subplots()
@@ -321,14 +323,14 @@ class Modulationmeter(ABC):
         _bins = _mod["bins"]
         _midbins = _mod["midbins"]
         ax.bar(
-                _bins[:-1],
-                _mod["relative_rate"],
-                yerr=_mod["relative_rate_err"],
-                width=_bins[1]-_bins[0],
-                edgecolor=kwargs.get("edgecolor", "none"),
-                align=kwargs.get("align", "edge"),
-                color=scalar_map.to_rgba(_mod["relative_rate"]),
-                )
+            _bins[:-1],
+            _mod["relative_rate"],
+            yerr=_mod["relative_rate_err"],
+            width=_bins[1] - _bins[0],
+            edgecolor=kwargs.get("edgecolor", "none"),
+            align=kwargs.get("align", "edge"),
+            color=scalar_map.to_rgba(_mod["relative_rate"]),
+        )
         ax.axhline(1.0, lw=0.50, color="k")
 
         if model_name is not None:
@@ -339,13 +341,18 @@ class Modulationmeter(ABC):
 
         if type == "phase":
             xtick_loc = [-180.0, -90.0, 0, 90.0, 180.0]
-            xtick_lab = [r"$-\pi$", r"$-\frac{\pi}{2}$", r"$0$", r"$\frac{\pi}{2}$", r"$\pi$"]
+            xtick_lab = [
+                r"$-\pi$",
+                r"$-\frac{\pi}{2}$",
+                r"$0$",
+                r"$\frac{\pi}{2}$",
+                r"$\pi$",
+            ]
             ax.set_xticks(xtick_loc)
             ax.set_xticklabels(xtick_lab)
             ax.set_xlabel(r"Tidal phase, $\phi$ (rad)")
         elif type == "stress":
             ax.set_xlabel(r"Tidal stress, $\sigma$ (Pa)")
-
 
         ax.set_ylabel(r"Relative rate of seismicity")
 
@@ -354,13 +361,23 @@ class Modulationmeter(ABC):
 
         return fig
 
+    def precompute_bin_membership(self):
+        if not hasattr(self, "catalog"):
+            print("Must have catalog attribute, call `set_catalog` first.")
+            return
+        for forcing_name in self.forcing_bins:
+            self.catalog[f"{forcing_name}_bin_membership"] = _bin_membership(
+                self.catalog[forcing_name].values, self.forcing_bins[forcing_name]
+            )
 
     def set_catalog(self, catalog):
         if catalog is None:
             self.catalog = None
         else:
             self.catalog = catalog
-            self.catalog.loc[:, "origin_time"] = pd.to_datetime(self.catalog.loc[:, "origin_time"])
+            self.catalog.loc[:, "origin_time"] = pd.to_datetime(
+                self.catalog.loc[:, "origin_time"]
+            )
             if "event_timing_sec" not in self.catalog:
                 self.catalog["event_timing_sec"] = (
                     pd.to_datetime(self.catalog["origin_time"])
@@ -427,52 +444,10 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                     "Any sampling coarser than 60sec may significantly misestimate "
                     "the duration of each phase-time bin."
                 )
-            forcing_bin_membership = np.digitize(
-                np.clip(
-                    self.forcing[forcing_name],
-                    a_min=self.forcing_bins[forcing_name].min(),
-                    a_max=self.forcing_bins[forcing_name].max(),
-                ),
-                self.forcing_bins[forcing_name],
-            )
 
-            # treat edge cases
-            bin_range = (
-                self.forcing_bins[forcing_name].max()
-                - self.forcing_bins[forcing_name].min()
+            forcing_bin_membership = _bin_membership(
+                self.forcing[forcing_name], self.forcing_bins[forcing_name]
             )
-            if np.abs(bin_range - 360.0) < 0.1:
-                cyclic_bins = True
-            else:
-                cyclic_bins = False
-            bin_width = np.abs(
-                self.forcing_bins[forcing_name][1] - self.forcing_bins[forcing_name][0]
-            )
-
-            # upper edge
-            if cyclic_bins:
-                if np.random.random() > 0.5:
-                    forcing_bin_membership[
-                        forcing_bin_membership == len(self.forcing_bins[forcing_name])
-                    ] = (len(self.forcing_bins[forcing_name]) - 1)
-                else:
-                    forcing_bin_membership[
-                        forcing_bin_membership == len(self.forcing_bins[forcing_name])
-                    ] = 1
-            else:
-                forcing_bin_membership[
-                    forcing_bin_membership == len(self.forcing_bins[forcing_name])
-                ] = (len(self.forcing_bins[forcing_name]) - 1)
-            # lower edge
-            if cyclic_bins:
-                if np.random.random() > 0.5:
-                    forcing_bin_membership[forcing_bin_membership == 0] = (
-                        len(self.forcing_bins[forcing_name]) - 1
-                    )
-                else:
-                    forcing_bin_membership[forcing_bin_membership == 0] = 1
-            else:
-                forcing_bin_membership[forcing_bin_membership == 0] = 1
 
             # find when the forcing time series transitions from
             # one bin to another
@@ -496,67 +471,67 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
                 / 1000.0
             )
 
-            if first_order_correction:
-                warnings.warn("first_order_correction feature is not yet operational!")
-                _jumps_after = jumps_after[1:]
-                _jumps_before = _jumps_after - 1
-                if cyclic_bins:
-                    _forcing = np.unwrap(
-                        self.forcing[forcing_name].astype("float128"), period=360.0
-                    )  # .values
-                else:
-                    _forcing = self.forcing[forcing_name].values
-                bin_min = self.forcing_bins[forcing_name].min()
-                bin_lower_edge = (
-                    bin_min + np.floor((_forcing - bin_min) / bin_width) * bin_width
-                )
-                bin_upper_edge = bin_lower_edge + bin_width
+            # if first_order_correction:
+            #    warnings.warn("first_order_correction feature is not yet operational!")
+            #    _jumps_after = jumps_after[1:]
+            #    _jumps_before = _jumps_after - 1
+            #    if cyclic_bins:
+            #        _forcing = np.unwrap(
+            #            self.forcing[forcing_name].astype("float128"), period=360.0
+            #        )  # .values
+            #    else:
+            #        _forcing = self.forcing[forcing_name].values
+            #    bin_min = self.forcing_bins[forcing_name].min()
+            #    bin_lower_edge = (
+            #        bin_min + np.floor((_forcing - bin_min) / bin_width) * bin_width
+            #    )
+            #    bin_upper_edge = bin_lower_edge + bin_width
 
-                dforcing = _forcing[_jumps_after] - _forcing[_jumps_before]
-                # gradient = dforcing / dt
-                transition_times = np.zeros(len(_jumps_before), dtype=np.float64)
-                # positive jumps
-                positive = dforcing > 0.0
-                time_to_upper_bin = (
-                    dt
-                    * (
-                        bin_upper_edge[_jumps_before[positive]]
-                        - _forcing[_jumps_before[positive]]
-                    )
-                    / dforcing[positive]
-                )
-                transition_times[positive] = (
-                    self.forcing["time_sec"].values[_jumps_before[positive]]
-                    + time_to_upper_bin
-                    # + np.maximum(0., time_to_upper_bin)
-                )
-                # negative jumps
-                negative = dforcing < 0.0
-                time_to_lower_bin = (
-                    dt
-                    * (
-                        bin_lower_edge[_jumps_before[negative]]
-                        - _forcing[_jumps_before[negative]]
-                    )
-                    / dforcing[negative]
-                )
-                transition_times[negative] = (
-                    self.forcing["time_sec"].values[_jumps_before[negative]]
-                    + time_to_lower_bin
-                    # + np.maximum(0., time_to_lower_bin)
-                )
-                # if this happens, it means that the numerical precision
-                # has reached its limit when unwrapping the phase
-                transition_times[dforcing == 0.0] = forcingtime_bin_starttime_sec[1:][
-                    dforcing == 0.0
-                ]
-                transition_times = np.hstack(
-                    (forcingtime_bin_starttime_sec[0], transition_times)
-                )
+            #    dforcing = _forcing[_jumps_after] - _forcing[_jumps_before]
+            #    # gradient = dforcing / dt
+            #    transition_times = np.zeros(len(_jumps_before), dtype=np.float64)
+            #    # positive jumps
+            #    positive = dforcing > 0.0
+            #    time_to_upper_bin = (
+            #        dt
+            #        * (
+            #            bin_upper_edge[_jumps_before[positive]]
+            #            - _forcing[_jumps_before[positive]]
+            #        )
+            #        / dforcing[positive]
+            #    )
+            #    transition_times[positive] = (
+            #        self.forcing["time_sec"].values[_jumps_before[positive]]
+            #        + time_to_upper_bin
+            #        # + np.maximum(0., time_to_upper_bin)
+            #    )
+            #    # negative jumps
+            #    negative = dforcing < 0.0
+            #    time_to_lower_bin = (
+            #        dt
+            #        * (
+            #            bin_lower_edge[_jumps_before[negative]]
+            #            - _forcing[_jumps_before[negative]]
+            #        )
+            #        / dforcing[negative]
+            #    )
+            #    transition_times[negative] = (
+            #        self.forcing["time_sec"].values[_jumps_before[negative]]
+            #        + time_to_lower_bin
+            #        # + np.maximum(0., time_to_lower_bin)
+            #    )
+            #    # if this happens, it means that the numerical precision
+            #    # has reached its limit when unwrapping the phase
+            #    transition_times[dforcing == 0.0] = forcingtime_bin_starttime_sec[1:][
+            #        dforcing == 0.0
+            #    ]
+            #    transition_times = np.hstack(
+            #        (forcingtime_bin_starttime_sec[0], transition_times)
+            #    )
 
-                correction = transition_times - forcingtime_bin_starttime_sec
+            #    correction = transition_times - forcingtime_bin_starttime_sec
 
-                forcingtime_bin_starttime_sec = transition_times
+            #    forcingtime_bin_starttime_sec = transition_times
 
             forcingtime_bin_duration_sec = (
                 forcingtime_bin_starttime_sec[1:] - forcingtime_bin_starttime_sec[:-1]
@@ -752,11 +727,12 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
         if forcing_name not in self.modulation:
             self.modulation[forcing_name] = {}
         self.modulation[forcing_name][window_time] = modulation
-        self.modulation[forcing_name][window_time]["bins"] = self.forcing_bins[forcing_name]
+        self.modulation[forcing_name][window_time]["bins"] = self.forcing_bins[
+            forcing_name
+        ]
         self.modulation[forcing_name][window_time]["midbins"] = self._midbins(
             self.modulation[forcing_name][window_time]["bins"]
         )
-
 
 
 class ModulationmeterMultiWindows(Modulationmeter):
@@ -808,7 +784,7 @@ class ModulationmeterMultiWindows(Modulationmeter):
         return
 
     def measure_modulation(
-        self, window_time, forcing_name, rate_estimate_kwargs={}, **kwargs
+        self, window_time, forcing_name, rate_estimate_kwargs={}, func=None, **kwargs
     ):
         """ """
         if self.catalog is None:
@@ -827,7 +803,10 @@ class ModulationmeterMultiWindows(Modulationmeter):
         if catalog is None:
             catalog = self.catalog
 
-        func = partial(utils.estimate_rate_forcing_bins, **rate_estimate_kwargs)
+        if func is None:
+            func = partial(utils.estimate_rate_forcing_bins, **rate_estimate_kwargs)
+        else:
+            func = partial(func, **rate_estimate_kwargs)
 
         modulation = utils.composite_rate_estimate(
             catalog,
@@ -961,7 +940,10 @@ class ShuffledModulationmeter(Modulationmeter):
         num_events = len(self.original_catalog)
         event_timing_sec = tmin + (tmax - tmin) * np.random.random(size=num_events)
         self.random_catalog = pd.DataFrame(
-            {"event_timing_sec": event_timing_sec, "origin_time": pd.to_datetime(event_timing_sec, unit="s")}
+            {
+                "event_timing_sec": event_timing_sec,
+                "origin_time": pd.to_datetime(event_timing_sec, unit="s"),
+            }
         )
         self.random_catalog.sort_values("event_timing_sec", inplace=True)
 
@@ -979,7 +961,9 @@ class ShuffledModulationmeter(Modulationmeter):
         # shuffle blocs
         np.random.shuffle(block_indexes)
         wt_shuffled = np.hstack([0.0] + [wt[blocks[i]] for i in block_indexes])
-        event_timing_sec = np.cumsum(wt_shuffled) + self.original_catalog["event_timing_sec"].min()
+        event_timing_sec = (
+            np.cumsum(wt_shuffled) + self.original_catalog["event_timing_sec"].min()
+        )
         if not hasattr(self, "random_catalog"):
             self.random_catalog = self.original_catalog[
                 ["event_timing_sec", "origin_time"]
@@ -1017,3 +1001,41 @@ class ShuffledModulationmeterMultiWindowForcingTimeBins(
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+
+def _bin_membership(x, bin_edges):
+    bin_membership = np.digitize(
+        np.clip(
+            x,
+            a_min=bin_edges.min(),
+            a_max=bin_edges.max(),
+        ),
+        bin_edges,
+    )
+
+    # treat edge cases
+    bin_range = bin_edges.max() - bin_edges.min()
+    if np.abs(bin_range - 360.0) < 0.1:
+        cyclic_bins = True
+    else:
+        cyclic_bins = False
+    bin_width = np.abs(bin_edges[1] - bin_edges[0])
+
+    # upper edge
+    if cyclic_bins:
+        if np.random.random() > 0.5:
+            bin_membership[bin_membership == len(bin_edges)] = len(bin_edges) - 1
+        else:
+            bin_membership[bin_membership == len(bin_edges)] = 1
+    else:
+        bin_membership[bin_membership == len(bin_edges)] = len(bin_edges) - 1
+    # lower edge
+    if cyclic_bins:
+        if np.random.random() > 0.5:
+            bin_membership[bin_membership == 0] = len(bin_edges) - 1
+        else:
+            bin_membership[bin_membership == 0] = 1
+    else:
+        bin_membership[bin_membership == 0] = 1
+
+    return bin_membership
