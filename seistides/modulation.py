@@ -299,7 +299,8 @@ class Modulationmeter(ABC):
                 )
 
     def plot_modulation(
-            self, forcing, window_name, ymin=0.75, ymax=1.25, model_name=None, type="phase", **kwargs
+            self, forcing, window_name, ymin=0.75, ymax=1.25, model_name=None, type="phase",
+            ax=None, **kwargs
             ):
         """
         """
@@ -312,7 +313,10 @@ class Modulationmeter(ABC):
                 norm=norm, cmap=kwargs.get("cmap", plt.get_cmap("coolwarm"))
                 )
 
-        fig, ax = plt.subplots()
+        if ax is None:
+            fig, ax = plt.subplots()
+        else:
+            fig = ax.get_figure()
         _mod = self.modulation[forcing][window_name]
         _bins = _mod["bins"]
         _midbins = _mod["midbins"]
