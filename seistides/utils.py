@@ -21,13 +21,52 @@ def estimate_rate_forcingtime_bins(
     cat,
     forcingtime_bins,
     forcing_bin_edges,
-    num_bootstraps=100,
+    num_bootstraps=0,
     num_std_cutoff=0.0,
     bin_extension=0,
     cyclic_bins=False,
 ):
     """
     cat is here just for API consistency
+
+    Parameters
+    ----------
+    cat : `pandas.DataFrame`
+        Earthquake catalog. Here just for API consistency but not used.
+    forcingtime_bins : `pandas.DataFrame`
+        Information on forcing-time bins (event count, duration, forcing values)
+        gathered by `seistides.modulation.ModulationmeterMultiWindowForcingTimeBins.count_events_in_forcingtime_bins`.
+    forcing_bin_edges : array-like
+        Edges of the forcing bins.
+    num_bootstraps : int, optional
+        If `num_bootstraps>0`, the rate is taken as the mean of `num_bootstraps` rates
+        estimated by bootstrapping the forcing-time bins. Defaults to 0.
+    num_std_cutoff : float, optional
+        If `num_std_cutoff>0.0`, forcing-time bins that have a rate exceeding
+        the mean rate by more than `num_std_cutoff` standard deviations are
+        discarded from the rate estimation. This feature may help mitigate 
+        artifacts in the catalog or act as a model-agnostic declustering option.
+        Defaults to 0.0.
+    bin_extension : int, optional
+        If `bin_extension>0`, the rate is computed in overlapping bins such that
+        rate[i] is the rate in forcing_bins[i-bin_extension:i+bin_extension]. 
+        Defaults to 0.
+    cyclic_bins : bool, optional
+        if True and if `bin_extension>0`, boundaries are periodic. Otherwise, 
+        edge bins are effectively smaller than others. Defaults to False.
+
+    Returns
+    --------
+    dict
+        - "event_count": Event count in each forcing bin.
+        - "event_count_err": Event count standard deviation if `num_bootstraps>0`.
+        - "bin_duration": Duration spanned by each bin. Some bins, like extreme
+                          stress values, may occur infrequently.
+        - "bin_duration_err": Bin duration standard deviation if `num_bootstraps>0`.
+        - "observed_rate": Event count divided by the bin duration.
+        - "observed_rate_err": Observed rate standard deviation if `num_bootstraps>0`.
+        - "relative_rate": Observed rate normalized by the total average rate.
+        - "relative_rate_err": Relative rate standard deviation if `num_bootstraps>0`.
     """
     num_bins = len(forcing_bin_edges) - 1
 
@@ -136,6 +175,8 @@ def estimate_rate_forcing_bins(
     forcing_bin_edges,
     clip_relative_rate_above=None,
     clip_relative_rate_below=None,
+    bin_extension=0,
+    cyclic_bins=False,
 ):
     """Count number of earthquakes in phase bins.
 
@@ -147,22 +188,22 @@ def estimate_rate_forcing_bins(
         Tidal forcing time series.
     forcing_bin_edges : array-like
         Edges of the forcing bins.
+    bin_extension : int, optional
+        If `bin_extension>0`, the rate is computed in overlapping bins such that
+        rate[i] is the rate in forcing_bins[i-bin_extension:i+bin_extension]. 
+        Defaults to 0.
+    cyclic_bins : bool, optional
+        if True and if `bin_extension>0`, boundaries are periodic. Otherwise, 
+        edge bins are effectively smaller than others. Defaults to False.
 
     Returns
     --------
-    seismicity_vs_phase : dict
-        For each phase component given in 'fields', a dictionary is given
-        with the following attributes:
-        - "event_count": Histogram of instantaneous phase values at earthquake times.
-        - "bins": Bins of the histogram.
-        - "bin_duration": Fraction of the time axis covered by each phase
-                           bin. For example, some phase values are
-                           rare so the associated phase bin covers a small
-                           fraction of the time axis and even in the case of
-                           tide-independent seismicity one expects
-                           significantly less earthquakes in these phase bins.
-        - "observed_rate": "phase_hist" normalized by the total number of
-                           earthquakes.
+    dict
+        - "event_count": Event count in each forcing bin.
+        - "bin_duration": Duration spanned by each bin. Some bins, like extreme
+                          stress values, may occur infrequently.
+        - "observed_rate": Event count divided by the bin duration.
+        - "relative_rate": Observed rate normalized by the total average rate.
     """
     forcing_at_eq = cat[forcing.name].values
     # bin the values of tidal phase at earthquake timings
@@ -187,6 +228,27 @@ def estimate_rate_forcing_bins(
         bin_duration = tidal_phase_hist * dt_tides
     else:
         bin_duration = np.zeros_like(tidal_phase_hist)
+
+    if bin_extension > 0:
+        num_bins = len(forcing_bin_edges) - 1
+        count_vs_forcing_ext = np.zeros(num_bins)
+        extended_bin_duration = np.zeros(num_bins)
+        for i in range(num_bins):
+            if cyclic_bins:
+                bin_indexes = (
+                    np.arange(i - bin_extension, i + bin_extension + 1) % num_bins
+                )# + 1
+            else:
+                bin_indexes = (
+                    np.arange(
+                        max(0, i - bin_extension), min(num_bins, i + bin_extension + 1)
+                    )
+                    #+ 1
+                )
+            count_vs_forcing_ext[i] = count_vs_forcing[bin_indexes].sum()
+            extended_bin_duration[i] = bin_duration[bin_indexes].sum()
+        count_vs_forcing = count_vs_forcing_ext
+        bin_duration = extended_bin_duration
 
     # average rate of seismicity over entire window
     average_rate = float(len(cat)) / (dt_tides * len(forcing))
@@ -868,6 +930,60 @@ def compute_instantaneous_phase_at_eq(
             )
         catalog.rename(columns={"tmp_name": field}, inplace=True)
     return catalog
+
+def compute_instantaneous_phase(x, t=None):
+    from scipy.signal import hilbert
+
+    x_a = hilbert(x)
+    inst_phase = np.angle(x_a, deg=True)
+
+    if t is not None:
+        # compute instantaneous frequency
+        dt = t[1] - t[0]
+        real_derivative = np.gradient(x_a.real, dt)
+        imag_derivative = np.gradient(x_a.imag, dt)
+
+        inst_radial_freq = (
+                (x_a.real * imag_derivative - x_a.imag * real_derivative)
+                / (np.abs(x_a)**2)
+                )
+
+
+        return inst_phase, inst_radial_freq 
+
+    return inst_phase
+
+
+def compute_instantaneous_phase_at_arbitrary_times(event_times, x, t_x):
+    """
+    Simpler than unravelling the instantaneous phase?
+    """
+    from scipy.signal import hilbert
+    from scipy.interpolate import interp1d
+
+    x_a = hilbert(x)
+
+    x_a_real_interp = np.interp(event_times, t_x, x_a.real)
+    x_a_imag_interp = np.interp(event_times, t_x, x_a.imag)
+    x_a_interp = x_a_real_interp + 1j * x_a_imag_interp
+    #print(x_a_real_interp, x_a_imag_interp, x_a_interp)
+
+    inst_phase = np.angle(x_a_interp, deg=True)
+
+    # compute instantaneous frequency
+    dt = t_x[1] - t_x[0]
+    real_derivative = np.gradient(x_a.real, dt)
+    imag_derivative = np.gradient(x_a.imag, dt)
+
+    real_derivative_interp = np.interp(event_times, t_x, real_derivative)
+    imag_derivative_interp = np.interp(event_times, t_x, imag_derivative)
+
+    inst_radial_freq = (
+            (x_a_interp.real * imag_derivative_interp - x_a_interp.imag * real_derivative_interp)
+            / (np.abs(x_a_interp)**2)
+            )
+
+    return inst_phase, inst_radial_freq 
 
 
 def unravel_phase(phases, degree=True):
