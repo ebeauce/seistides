@@ -36,8 +36,13 @@ class Modulationmeter(ABC):
         self.forcing = forcing
         self.forcing_bins = forcing_bins
         self.window_type = window_type
+        self._window_duration_days = None
         self.modulation = {}
         self.model = {}
+
+    @property
+    def window_duration_days(self):
+        return self._window_duration_days
 
     @abstractmethod
     def measure_modulation(self, func, window_time, forcing_name, **kwargs):
@@ -85,6 +90,74 @@ class Modulationmeter(ABC):
         self.modulation[forcing_name][window_time]["midbins"] = self._midbins(
             self.modulation[forcing_name][window_time]["bins"]
         )
+
+    def measure_energy_modulation(
+            self, window_time, forcing_name, func=None,
+            energy_estimate_kwargs=None, **kwargs
+            ):
+        """ """
+        if self.catalog is None:
+            warnings.warn(
+                "You need to define the `catalog` attribute. See `set_catalog`."
+            )
+            return
+        if self.forcing is None:
+            warnings.warn(
+                "You need to define the `forcing` attribute. See `set_forcing`."
+            )
+            return
+        if "magnitude" not in self.catalog.columns:
+            warnings.warn(
+                    "catalog must have a 'magnitude' column."
+                    )
+            return
+        if energy_estimate_kwargs is None:
+            energy_estimate_kwargs = {}
+
+        # 'hidden' kwarg for `shuffle_and_measure_modulation`
+        catalog = kwargs.get("catalog", None)
+        if catalog is None:
+            catalog = self.catalog
+
+        if func is None:
+            func = partial(utils.estimate_energy_forcing_bins, **energy_estimate_kwargs)
+        else:
+            func = partial(func, **energy_estimate_kwargs)
+
+        subcat = self.catalog[
+                (self.catalog["origin_time"] > (window_time - pd.Timedelta(days=self.window_duration_days)))
+                & (self.catalog["origin_time"] <= window_time)
+                ]
+
+        energy_modulation = func(
+                subcat, forcing_name, self.forcing_bins[forcing_name],
+                )
+
+        if forcing_name not in self.modulation:
+            self.modulation[forcing_name] = {}
+        if window_time not in self.modulation[forcing_name]:
+            self.modulation[forcing_name][window_time] = {}
+
+        # if rate modulation was estimated, use it to estimate the "robust a-value"
+        if "relative_rate" in self.modulation[forcing_name][window_time]:
+            energy_modulation["avalue_robust"] = (
+                    np.log10(self.modulation[forcing_name][window_time]["relative_rate"])
+                    + energy_modulation["bvalue"] * energy_modulation["mc"]
+                    )
+            energy_modulation["avalue_robust_err"] = (
+                    self.modulation[forcing_name][window_time]["relative_rate_err"]
+                    / (np.log(10.) * self.modulation[forcing_name][window_time]["relative_rate"])
+                    + energy_modulation["bvalue_err"] * energy_modulation["mc"]
+                    )
+        for field in energy_modulation:
+            self.modulation[forcing_name][window_time][field] = energy_modulation[field]
+
+        if "midbins" not in self.modulation[forcing_name][window_time]:
+            self.modulation[forcing_name][window_time]["midbins"] = self._midbins(
+                self.modulation[forcing_name][window_time]["bins"]
+            )
+
+
 
     def adjust_forcing_table_to_catalog(self):
         """Adjust forcing table to the catalog's time span."""
@@ -425,7 +498,7 @@ class ModulationmeterForcingTimeBins(Modulationmeter):
             downsample=downsample,
             window_type=window_type,
         )
-        self.window_duration_days = window_duration_days
+        self._window_duration_days = window_duration_days
 
     @property
     def window_duration_sec(self):
@@ -766,11 +839,16 @@ class ModulationmeterMultiWindows(Modulationmeter):
         self.overlap = overlap
 
     @property
-    def large_window_days(self):
+    def window_duration_days(self):
         return (
             self.num_short_windows * (1.0 - self.overlap) * self.short_window_days
             + self.overlap * self.short_window_days
         )
+
+    @property
+    def large_window_days(self):
+        # alias (to delete in the future?)
+        return self.window_duration_days
 
     def update_window_parameters(
         self,

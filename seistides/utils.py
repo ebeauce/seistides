@@ -16,6 +16,10 @@ from tqdm import tqdm
 
 from time import time as give_time
 
+# --------------------------------------------------------------------
+#                       rate estimation
+# --------------------------------------------------------------------
+
 
 def estimate_rate_forcingtime_bins(
     cat,
@@ -904,8 +908,274 @@ def loglikelihood_poisson(observed, expectation):
     return np.sum(generalized_poisson(observed, expectation))
 
 # --------------------------------------------------------------------
-#                       plotting functions
+#           b-value functions (will probably be moved to dedicated module?)
 # --------------------------------------------------------------------
+
+def estimate_energy_forcing_bins(
+        catalog, forcing_name, forcing_bins,
+        bin_extension=0, cyclic_bins=False, mag_column="magnitude",
+        **mle_bvalue_kwargs
+        ):
+    """
+    """
+    # initialize output
+    output = {}
+    num_bins = len(forcing_bins) - 1
+    output["bvalue"] = np.zeros(num_bins, dtype=np.float32)
+    output["bvalue_err"] = np.zeros(num_bins, dtype=np.float32)
+    output["avalue"] = np.zeros(num_bins, dtype=np.float32)
+    output["avalue_err"] = np.zeros(num_bins, dtype=np.float32)
+    output["mc"] = np.zeros(num_bins, dtype=np.float32)
+    output["mean_mag"] = np.zeros(num_bins, dtype=np.float32)
+
+    # bin magnitudes
+    magnitude_vs_forcing = bin_magnitudes(
+            catalog, forcing_name, forcing_bins,
+            mag_column=mag_column,
+            bin_extension=bin_extension, cyclic_bins=cyclic_bins
+            )
+
+    for i in range(num_bins):
+        gutenberg_richter_params = mle_bvalue(
+                magnitude_vs_forcing[i], **mle_bvalue_kwargs
+                )
+        output["bvalue"][i] = gutenberg_richter_params["b"]
+        output["bvalue_err"][i] = gutenberg_richter_params["b_err"]
+        output["avalue"][i] = gutenberg_richter_params["a"]
+        output["avalue_err"][i] = gutenberg_richter_params["a_err"]
+        output["mc"][i] = gutenberg_richter_params["Mc"]
+        output["mean_mag"][i] = magnitude_vs_forcing[i].mean()
+
+    output["bins"] = forcing_bins
+
+    return output
+
+
+def bin_magnitudes(
+    cat,
+    forcing,
+    bin_edges,
+    mag_column="magnitude",
+    bin_extension=0,
+    cyclic_bins=False,
+):
+    """
+    """
+    bin_centers = (bin_edges[1:] + bin_edges[:-1]) / 2.0
+    num_bins = len(bin_edges)
+    forcing_bin_idx = np.digitize(cat[forcing].values, bin_edges)
+    mag_in_bins = [[] for i in range(len(bin_centers))]
+    for i in range(len(bin_centers)):
+        if cyclic_bins:
+            bin_edge_indexes = (
+                np.arange(i - bin_extension, i + bin_extension + 1) % num_bins
+            ) + 1
+        else:
+            bin_edge_indexes = (
+                np.arange(
+                    max(0, i - bin_extension), min(num_bins, i + bin_extension + 1)
+                )
+                + 1
+            )
+        selected_forcing_bin_indexes = np.isin(forcing_bin_idx, bin_edge_indexes)
+        mag_in_bins[i] = (
+            cat.loc[selected_forcing_bin_indexes, mag_column].dropna().values
+        )
+    return mag_in_bins
+
+
+def magnitude_distribution(M, Mmin=-1.0, Mmax=4.0, nbins=30, null_value=-10):
+    """
+    Parameters
+    ----------
+    M: numpy.ndarray
+        Magnitudes.
+    Mmin: scalar float, optional
+        Minimum magnitude in histogram. Default to -1.
+    Mmax: scalar float, optional
+        Maximum magnitude in histogram. Default to 4.
+    nbins: scalar int, optional
+        Number of bins in histogram. Default to 30.
+    null_value: scalar int or float, optional
+        Value indicating no data. Default to -10.
+
+    Returns
+    -------
+    count: numpy.ndarray
+        Number of earthquakes per magnitude bin.
+    cumulative_count: numpy.ndarray
+
+    """
+    count, bins = np.histogram(
+        M[M != null_value],
+        range=(Mmin, Mmax),
+        bins=nbins,
+    )
+    mag_bins = (bins[1:] + bins[:-1]) / 2.0
+    # compute the cumulative magnitude distribution such that:
+    # f(M) = n >= M
+    count_for_descending_mag = count[::-1]
+    cumulative_count = np.cumsum(count_for_descending_mag)
+    # cumulative_count is given for descending magnitudes
+    # reverse its order to get it for ascending magnitudes
+    cumulative_count = cumulative_count[::-1]
+    return count, cumulative_count, mag_bins
+
+
+def mle_bvalue(
+    magnitudes,
+    Mmax_fit=5.0,
+    Mmin=-1.0,
+    Mmax=4.0,
+    nbins=30,
+    null_value=-10,
+    n_total_min=50,
+    n_above_Mc_min=30,
+    Mc_buffer=0.2,
+    kernel_smoothing_width=0.05
+):
+    """
+    Maximum Likelihood Estimate of the b-value.
+
+    Parameters
+    ----------
+    magnitudes : numpy.ndarray
+        Magnitudes.
+    Mmax_fit : float, optional
+        Maximum magnitude included in the estimation of the b-value. Default is 5.0.
+    Mmin : float, optional
+        Minimum magnitude in histogram. Default is -1.0.
+    Mmax : float, optional
+        Maximum magnitude in histogram. Default is 4.0.
+    nbins : int, optional
+        Number of bins in histogram. Default is 30.
+    null_value : int or float, optional
+        Value indicating no data. Default is -10.
+    n_total_min : int, optional
+        Minimum number of magnitudes to estimate the b-value. Default is 50.
+    n_above_Mc_min : int, optional
+        Minimum number of magnitudes above the magnitude of completeness. Default is 30.
+    Mc_buffer : float, optional
+        Magnitude interval added to the estimated Mc, magnitude of completeness,
+        to increase the robustness of the estimation of b-value. Default is 0.2.
+
+    Returns
+    -------
+    GR : dict
+        A dictionary containing the following keys:
+
+        cumulative_count : numpy.ndarray
+            Cumulative number of earthquakes.
+        magnitude_bins : numpy.ndarray
+            Magnitude bins.
+        magnitudes : numpy.ndarray
+            Magnitudes.
+        Mc : float
+            Magnitude of completeness.
+        b : float
+            b-value of the Gutenberg-Richter distribution.
+        a : float
+            a-value of the Gutenberg-Richter distribution.
+        b_err : float
+            Error in the b-value estimation using Shi's method.
+        a_err : float
+            Error in the a-value estimation.
+        kde : scipy.stats.gaussian_kde
+            Gaussian kernel density estimate of the magnitude distribution.
+        Mmin : float
+            Minimum magnitude used in the histogram.
+        Mmax : float
+            Maximum magnitude used in the histogram.
+
+    Raises
+    ------
+    Exception
+        If there is an error in the estimation of the magnitude of
+        completeness using the kernel density estimate.
+
+    Notes
+    -----
+    The magnitude of completeness is estimated with the maximum curvature method.
+    The b-value of the Gutenberg-Richter distribution is estimated using the
+    Maximum Likelihood Estimate (MLE) method [1]_. Once the b-value is known, 
+    the a-value is given by the least-squares solution.
+
+    References
+    ----------
+    .. [1] Aki, K. (1965). Maximum likelihood estimate of b in the formula
+    log N = a − bM and its confidence limits. Bulletin of the Earthquake Research
+    Institute, 43, 237-239.
+    """
+    from scipy.stats import gaussian_kde
+
+    # remove null values
+    magnitudes = magnitudes[magnitudes != null_value]
+    count, cumulative_count, magnitude_bins = magnitude_distribution(
+        magnitudes, Mmin=Mmin, Mmax=Mmax, nbins=nbins, null_value=null_value
+    )
+    # estimate pdf with gaussian kernels
+    # apply the maximum curvature method to the
+    # kde instead of the raw histogram
+    try:
+        kernel = gaussian_kde(magnitudes, bw_method=kernel_smoothing_width)
+        M_ = np.linspace(Mmin, Mmax, nbins)
+        Mc = M_[kernel(M_).argmax()]  # + 0.2
+    except Exception as e:
+        print(e)
+        Mc = magnitude_bins[count.argmax()]  # MAXC method
+        kernel = None
+    Mc_w_buffer = Mc + Mc_buffer
+    bin0 = np.where(magnitude_bins >= Mc_w_buffer)[0][0]
+    Mmax_fit = magnitudes.max()
+    m_above_Mc = magnitudes[magnitudes >= Mc_w_buffer]
+    n_total_mag = len(magnitudes)
+    if len(m_above_Mc) > n_above_Mc_min and n_total_mag > n_total_min:
+        # MLE b-value (Aki)
+        b = 1.0 / (np.log(10) * np.mean(m_above_Mc - Mc_w_buffer))
+        # Shi std err
+        b_err = (
+            2.3
+            * b**2
+            * np.sqrt(
+                np.mean((m_above_Mc - np.mean(m_above_Mc)) ** 2)
+                / (len(m_above_Mc) - 1.0)
+            )
+        )
+        descending_mag = np.sort(m_above_Mc)
+        cumul_count = np.arange(1, 1 + len(m_above_Mc))
+        # least-squares solution:
+        log_cumul_count = np.log10(cumul_count)
+        a = np.mean(log_cumul_count + b * descending_mag)
+        # least-squares uncertainty:
+        num_points = len(log_cumul_count)
+        res_var = (
+                np.sum((log_cumul_count - (a - b * descending_mag))**2)
+                / (num_points - 1) # one degree of freedom
+                )
+        a_var = res_var * (
+                1. / num_points + descending_mag.mean()**2 / (
+                    (num_points - 1) * descending_mag.var()
+                    )
+                )
+        a_err = np.sqrt(a_var)
+        #a_err = np.std(log_cumul_count + b * descending_mag) # naive std?
+    else:
+        a, a_err, b, b_err, Mc = 5 * [null_value]
+    # store everything in a dictionary
+    GR = {
+        "cumulative_count": cumulative_count,
+        "magnitude_bins": magnitude_bins,
+        "magnitudes": magnitudes,
+        "Mc": Mc,
+        "b": b,
+        "a": a,
+        "b_err": b_err,
+        "a_err": a_err,
+        "kde": kernel,
+        "Mmin": Mmin,  # for plot_bvalue
+        "Mmax": Mmax,  # for plot_bvalue
+    }
+    return GR
 
 # --------------------------------------------------------------------
 #                     data loading functions
