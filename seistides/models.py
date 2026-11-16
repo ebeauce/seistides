@@ -521,3 +521,152 @@ def fit_relative_rate_vs_stress_rate_state(
     model = {"parameters": model_parameters, "errors": model_errors, "func": model_func}
 
     return model
+
+
+# ----------------------------------------------------------
+#           Fit b-value vs stress
+# ----------------------------------------------------------
+
+def cosine_bvalue(x, alpha, phi, C=0.):
+    return C + alpha * np.cos(x - phi)
+
+def exp_bvalue(x, alpha, phi, C=1.):
+    return C * np.exp(alpha * np.cos(x - phi))
+
+
+def fit_bvalue_vs_phase(
+    x, y, y_err,
+    num_resamplings=10,
+    objective="l2",
+    model="cosine",
+    y_err_min=0.,
+    use_err_for_weights=True,
+):
+    """ """
+    from scipy.optimize import minimize
+
+    assert model in {"cosine", "exp"}, "model should be either of 'cosine' or 'exp'"
+
+    deg2rad = np.pi / 180.0
+    x_ = x * deg2rad
+
+    if model == "cosine":
+        _model = cosine_bvalue
+        bounds = [(0.0, 1.0), (-np.pi, np.pi)]
+    elif model == "exp":
+        raise(NotImplementedError)
+        #_model = exp_rate_ratio
+        #bounds = [(0.0, 10.0), (-np.pi, np.pi)]
+
+    y_err = np.maximum(y_err, y_err_min)
+
+    if use_err_for_weights:
+        weights = np.clip(
+            y_err, a_min=np.percentile(y_err, 2.5), a_max=np.percentile(y_err, 97.5)
+        )
+        weights = 1.0 / weights
+    else:
+        weights = np.ones(len(y_err))
+    weights /= weights.sum()
+
+    if objective == "l2":
+        # l2-norm
+        loss = lambda p, obs: np.sum(weights * (_model(x_, *p) - obs) ** 2)
+    elif objective == "l1":
+        # l1-norm
+        loss = lambda p, obs: np.sum(weights * np.abs(_model(x_, *p) - obs))
+
+    inverted_alpha = np.zeros(num_resamplings + 1, dtype=np.float32)
+    inverted_phi = np.zeros(num_resamplings + 1, dtype=np.float32)
+
+    delta_y = y - np.median(y)
+
+    # --------------------------------
+    #      fit original measurement
+    success = False
+    while not success:
+        first_guess = (
+            0.05 * np.random.random(),
+            np.random.uniform(low=-0.99 * np.pi, high=0.99 * np.pi),
+        )
+        optimization_results = minimize(
+            loss,
+            first_guess,
+            args=(delta_y),
+            bounds=bounds,  # jac="3-point"
+        )
+        success = optimization_results.success
+
+    inverted_alpha[0] = optimization_results.x[0]
+    inverted_phi[0] = optimization_results.x[1]
+
+    # --------------------------------
+    #      fit perturbed measurements
+    n = 0
+    while n < num_resamplings:
+        # generate random sample assuming that each bin [i] of the histogram
+        # is normally distributed with mean y[i] and std y_err[i]
+        y_b = np.random.normal(loc=0.0, scale=1.0, size=len(y))
+        # noisy y
+        y_b = y_b * np.maximum(y_err, y_err_min) + delta_y
+        first_guess = (
+            0.05 * np.random.random(),
+            np.random.uniform(low=-0.99*np.pi, high=0.99*np.pi),
+        )
+        optimization_results = minimize(
+            loss,
+            first_guess,
+            args=(y_b),
+            bounds=bounds,  # jac="3-point"
+        )
+        if optimization_results.success == False:
+            continue
+        inverted_alpha[1 + n] = optimization_results.x[0]
+        inverted_phi[1 + n] = optimization_results.x[1]
+        if inverted_alpha[1 + n] == 0:
+            continue
+        n += 1
+    inverted_cos_phi = np.cos(inverted_phi)
+    inverted_sin_phi = np.sin(inverted_phi)
+    mean_phi = np.arctan2(np.mean(inverted_sin_phi), np.mean(inverted_cos_phi))
+    diff = inverted_phi - mean_phi
+    #diff_phi = np.min(
+    #    np.stack(
+    #        [
+    #            np.abs(diff),
+    #            np.abs(2.0 * np.pi + diff),
+    #            np.abs(diff - 2.0 * np.pi),
+    #        ],
+    #        axis=1,
+    #    ),
+    #    axis=1,
+    #)
+    diff_phi2 = np.min(
+        np.stack(
+            [
+                diff**2,
+                (2.0 * np.pi + diff) ** 2,
+                (diff - 2.0 * np.pi) ** 2,
+            ],
+            axis=1,
+        ),
+        axis=1,
+    )
+    model_parameters = {
+        "alpha": np.mean(inverted_alpha),
+        "phi": mean_phi,
+    }
+    model_errors = {
+            "alpha_err": np.std(inverted_alpha),
+            #"phi_err": np.mean(diff_phi),
+            "phi_err": np.sqrt(np.mean(diff_phi2)),
+            }
+    model_func = partial(
+        _model,
+        alpha=model_parameters["alpha"],
+        phi=model_parameters["phi"],
+        C=np.median(y)
+    )
+    model = {"parameters": model_parameters, "errors": model_errors, "func": model_func}
+    return model
+
